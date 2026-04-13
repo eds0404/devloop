@@ -1,0 +1,23 @@
+project_root: C:\path\to\scala-project
+max_prompt_chars: 120000
+max_files: 12
+max_snippet_lines: 180
+max_search_results: 20
+max_error_groups: 20
+max_test_failures: 10
+include_globs:
+  - "**/*"
+exclude_globs:
+  - ".git/**"
+  - "target/**"
+  - ".bloop/**"
+  - ".metals/**"
+  - ".idea/**"
+  - "project/target/**"
+snippet_context_before: 25
+snippet_context_after: 40
+project_packages: []
+allow_apply_on_dirty_files: false
+state_dir_mode: localappdata
+prompt_language: en
+human_language: ru

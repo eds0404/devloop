@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "devloop"
+version = "0.1.0"
+description = "Human-in-the-loop local development assistant for Scala/sbt repositories."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+  { name = "OpenAI Codex" }
+]
+dependencies = []
+
+[project.scripts]
+devloop = "devloop.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["devloop*"]
+
+[tool.setuptools.package-data]
+devloop = ["templates/*.txt"]

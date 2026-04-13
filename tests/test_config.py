@@ -1,0 +1,32 @@
+from pathlib import Path
+import unittest
+
+from devloop.config import DevloopConfig, default_config_text
+
+
+class ConfigTests(unittest.TestCase):
+    def test_normalizes_language_aliases(self) -> None:
+        config = DevloopConfig(
+            project_root=Path(__file__).resolve().parents[1],
+            prompt_language="English",
+            human_language="Russian",
+        )
+        self.assertEqual(config.prompt_language, "en")
+        self.assertEqual(config.human_language, "ru")
+
+    def test_supports_english_human_language(self) -> None:
+        config = DevloopConfig(
+            project_root=Path(__file__).resolve().parents[1],
+            prompt_language="en",
+            human_language="en",
+        )
+        self.assertEqual(config.human_language_name, "English")
+
+    def test_default_config_uses_short_codes(self) -> None:
+        text = default_config_text()
+        self.assertIn("prompt_language: en", text)
+        self.assertIn("human_language: ru", text)
+
+
+if __name__ == "__main__":
+    unittest.main()
