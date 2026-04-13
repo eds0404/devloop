@@ -24,6 +24,7 @@ class PatchApplyResult:
 
 
 def extract_patch_targets(patch_text: str) -> list[PatchTarget]:
+    _validate_patch_shape(patch_text)
     targets: list[PatchTarget] = []
     current_target: PatchTarget | None = None
 
@@ -85,9 +86,9 @@ def apply_patch(
         patch_path = Path(handle.name)
 
     try:
-        run_git(repo_root, ["apply", "--check", "--verbose", str(patch_path)])
-        run_git(repo_root, ["apply", "--verbose", str(patch_path)])
-        run_git(repo_root, ["add", "-A", "--", *[str(path) for path in repo_relative_paths]])
+        run_git(repo_root, ["apply", "--check", "--index", "--verbose", str(patch_path)])
+        run_git(repo_root, ["apply", "--index", "--verbose", str(patch_path)])
+        _verify_staged_paths(repo_root, repo_relative_paths)
         status_summary = summarize_paths_status(repo_root, repo_relative_paths)
         return PatchApplyResult(
             affected_files=[path.as_posix() for path in affected_paths],
@@ -116,6 +117,22 @@ def validate_repo_relative_path(path: PurePosixPath) -> PurePosixPath:
     return path
 
 
+def _validate_patch_shape(patch_text: str) -> None:
+    first_content_line = None
+    for raw_line in patch_text.splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        first_content_line = stripped
+        break
+    if first_content_line is None:
+        raise PatchApplyError("Patch is empty")
+    if not first_content_line.startswith("diff --git "):
+        raise PatchApplyError(
+            "Patch must contain only a Git unified diff and must start with `diff --git `"
+        )
+
+
 def _parse_diff_header(line: str) -> PatchTarget:
     rest = line[len("diff --git ") :]
     try:
@@ -137,5 +154,21 @@ def _parse_diff_header(line: str) -> PatchTarget:
 def _dedupe_targets(targets: list[PatchTarget]) -> list[PatchTarget]:
     seen: dict[str, PatchTarget] = {}
     for target in targets:
-        seen[target.path.as_posix()] = target
+        key = target.path.as_posix()
+        if key in seen:
+            raise PatchApplyError(
+                f"Patch touches the same path more than once: {key}. Split or merge the hunks into one diff section."
+            )
+        seen[key] = target
     return list(seen.values())
+
+
+def _verify_staged_paths(repo_root: Path, repo_relative_paths: list[Path]) -> None:
+    expected = {path.as_posix() for path in repo_relative_paths}
+    result = run_git(repo_root, ["diff", "--cached", "--name-only", "--", *[str(path) for path in repo_relative_paths]])
+    staged = {line.strip().replace("\\", "/") for line in result.stdout.splitlines() if line.strip()}
+    if staged != expected:
+        raise PatchApplyError(
+            "Patch verification failed after apply. "
+            f"Expected staged paths: {sorted(expected)}. Actual staged paths: {sorted(staged)}."
+        )

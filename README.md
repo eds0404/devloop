@@ -167,12 +167,13 @@ For backward compatibility, the parser still accepts legacy `summary_ru` and `ne
 `APPLY_PATCH` uses Git-aware validation and application:
 
 1. Extract affected paths from the unified diff.
-2. Reject paths outside the repository root or `.git` internals.
-3. Reject rename and binary patches in the MVP.
-4. Check for dirty affected files unless `allow_apply_on_dirty_files: true`.
-5. Run `git apply --check`.
-6. Run `git apply`.
-7. Run `git add -A -- <affected paths>`.
+2. Reject patches that contain prose before `diff --git` or touch the same path more than once.
+3. Reject paths outside the repository root or `.git` internals.
+4. Reject rename and binary patches in the MVP.
+5. Check for dirty affected files unless `allow_apply_on_dirty_files: true`.
+6. Run `git apply --check --index`.
+7. Run `git apply --index`.
+8. Verify that the staged changed paths exactly match the paths declared in the diff.
 
 ## Scala/sbt Log Parsing
 

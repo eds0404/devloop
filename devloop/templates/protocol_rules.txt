@@ -108,3 +108,9 @@ payload:
     -old line
     +new line
 <<<DEVLOOP_COMMAND_END>>>
+
+Additional APPLY_PATCH rules:
+- Put only the unified diff inside `payload.patch`.
+- Do not add explanations, markdown fences, or comments inside `payload.patch`.
+- Touch only the smallest necessary set of files.
+- Do not emit the same file twice in one patch.

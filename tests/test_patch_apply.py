@@ -26,7 +26,18 @@ class PatchApplyTests(unittest.TestCase):
         with self.assertRaises(PatchApplyError):
             validate_repo_relative_path(PurePosixPath("../outside.scala"))
 
+    def test_rejects_non_diff_preamble(self) -> None:
+        patch = "Here is your patch\n" + PATCH_TEXT
+        with self.assertRaises(PatchApplyError) as context:
+            extract_patch_targets(patch)
+        self.assertIn("must start with `diff --git `", str(context.exception))
+
+    def test_rejects_duplicate_paths(self) -> None:
+        duplicate = PATCH_TEXT + "\n" + PATCH_TEXT
+        with self.assertRaises(PatchApplyError) as context:
+            extract_patch_targets(duplicate)
+        self.assertIn("same path more than once", str(context.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
-
