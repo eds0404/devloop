@@ -27,6 +27,7 @@ class SessionState:
     last_known_current_goal: str = ""
     last_truncation_report: str = ""
     command_history_summary: list[str] = field(default_factory=list)
+    followup_prompt_count: int = 0
 
     def touch(self) -> None:
         self.last_run_at = _utc_now()
@@ -38,6 +39,9 @@ class SessionState:
         self.command_history_summary.append(cleaned)
         if len(self.command_history_summary) > max_entries:
             self.command_history_summary = self.command_history_summary[-max_entries:]
+
+    def note_followup_prompt_generated(self) -> None:
+        self.followup_prompt_count += 1
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -52,6 +56,7 @@ class SessionState:
             "last_known_current_goal": self.last_known_current_goal,
             "last_truncation_report": self.last_truncation_report,
             "command_history_summary": list(self.command_history_summary),
+            "followup_prompt_count": self.followup_prompt_count,
         }
 
     @classmethod
@@ -68,6 +73,7 @@ class SessionState:
             last_known_current_goal=str(data.get("last_known_current_goal", "")),
             last_truncation_report=str(data.get("last_truncation_report", "")),
             command_history_summary=list(data.get("command_history_summary", [])),
+            followup_prompt_count=int(data.get("followup_prompt_count", 0)),
         )
 
 

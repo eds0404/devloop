@@ -1,20 +1,13 @@
-"""Safe Git-aware patch validation and application."""
+"""Safe Git-aware structured patch validation and application."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 from pathlib import Path, PurePosixPath
-import shlex
-import tempfile
 
 from devloop.errors import PatchApplyError
 from devloop.git_tools import list_dirty_paths, run_git, summarize_paths_status
-
-
-@dataclass(slots=True)
-class PatchTarget:
-    path: PurePosixPath
-    change_type: str
 
 
 @dataclass(slots=True)
@@ -23,113 +16,42 @@ class PatchApplyResult:
     git_status_summary: str
 
 
-PATCH_FENCE_LINES = {
-    "```",
-    "```diff",
-    "```patch",
-    "```git",
-}
-PATCH_METADATA_PREFIXES = (
-    "index ",
-    "--- ",
-    "+++ ",
-    "new file mode",
-    "deleted file mode",
-    "old mode ",
-    "new mode ",
-    "similarity index ",
-    "dissimilarity index ",
-    "copy from ",
-    "copy to ",
-    "rename from ",
-    "rename to ",
-    "Binary files ",
-    "GIT binary patch",
-)
+@dataclass(slots=True)
+class SearchReplaceOp:
+    search: str
+    replace: str
+    expected_matches: int
 
 
-def extract_patch_targets(patch_text: str) -> list[PatchTarget]:
-    patch_text = normalize_patch_text(patch_text)
-    _validate_patch_shape(patch_text)
-    targets: list[PatchTarget] = []
-    current_target: PatchTarget | None = None
-
-    for raw_line in patch_text.splitlines():
-        line = raw_line.rstrip("\n")
-        if line.startswith("diff --git "):
-            current_target = _parse_diff_header(line)
-            targets.append(current_target)
-            continue
-        if current_target is None:
-            continue
-        if line.startswith("rename from ") or line.startswith("rename to "):
-            raise PatchApplyError("Rename patches are not supported in the MVP")
-        if line.startswith("GIT binary patch"):
-            raise PatchApplyError("Binary patches are not supported in the MVP")
-        if line.startswith("new file mode"):
-            current_target.change_type = "add"
-        elif line.startswith("deleted file mode"):
-            current_target.change_type = "delete"
-        elif line.startswith("--- /dev/null"):
-            current_target.change_type = "add"
-        elif line.startswith("+++ /dev/null"):
-            current_target.change_type = "delete"
-
-    if not targets:
-        raise PatchApplyError("Patch does not contain any diff --git headers")
-    return _dedupe_targets(targets)
+@dataclass(slots=True)
+class SearchReplaceFilePlan:
+    path: PurePosixPath
+    operation: str
+    expected_sha256: str | None
+    replacements: list[SearchReplaceOp]
+    content: str | None = None
 
 
-def apply_patch(
+TEXT_ENCODINGS = ("utf-8", "utf-8-sig", "cp1251", "cp1252", "latin-1")
+ALLOWED_FILE_OPERATIONS = {"replace", "create", "delete"}
+
+
+def apply_patch_payload(
     repo_root: Path,
     state_dir: Path,
-    patch_text: str,
+    payload: dict[str, object],
     *,
     allow_apply_on_dirty_files: bool,
 ) -> PatchApplyResult:
-    patch_text = normalize_patch_text(patch_text)
-    targets = extract_patch_targets(patch_text)
-    affected_paths = [validate_repo_relative_path(target.path) for target in targets]
-    repo_relative_paths = [Path(*path.parts) for path in affected_paths]
-
-    if not allow_apply_on_dirty_files:
-        dirty = list_dirty_paths(repo_root, repo_relative_paths)
-        if dirty:
-            dirty_text = ", ".join(sorted(dirty))
-            raise PatchApplyError(
-                f"Refusing to apply patch because affected files are dirty: {dirty_text}"
-            )
-
-    state_dir.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        mode="w",
-        encoding="utf-8",
-        suffix=".patch",
-        delete=False,
-        dir=state_dir,
-        newline="\n",
-    ) as handle:
-        handle.write(patch_text)
-        patch_path = Path(handle.name)
-
-    try:
-        run_git(repo_root, ["apply", "--check", "--index", "--verbose", str(patch_path)])
-        run_git(repo_root, ["apply", "--index", "--verbose", str(patch_path)])
-        _verify_staged_paths(repo_root, repo_relative_paths)
-        status_summary = summarize_paths_status(repo_root, repo_relative_paths)
-        return PatchApplyResult(
-            affected_files=[path.as_posix() for path in affected_paths],
-            git_status_summary=status_summary,
-        )
-    except Exception as exc:  # noqa: BLE001
-        if isinstance(exc, PatchApplyError):
-            raise
-        raise PatchApplyError(_patch_apply_failure_message(str(exc))) from exc
-    finally:
-        try:
-            patch_path.unlink(missing_ok=True)
-        except OSError:
-            pass
+    _ = state_dir
+    patch_format = str(payload.get("patch_format", ""))
+    if patch_format != "search_replace_v1":
+        raise PatchApplyError("Only patch_format=search_replace_v1 is supported")
+    return apply_search_replace_patch(
+        repo_root,
+        payload,
+        allow_apply_on_dirty_files=allow_apply_on_dirty_files,
+    )
 
 
 def validate_repo_relative_path(path: PurePosixPath) -> PurePosixPath:
@@ -143,117 +65,190 @@ def validate_repo_relative_path(path: PurePosixPath) -> PurePosixPath:
         raise PatchApplyError("Patches may not touch .git internals")
     return path
 
-
-def normalize_patch_text(patch_text: str) -> str:
-    text = patch_text.replace("\r\n", "\n").replace("\r", "\n").lstrip("\ufeff")
-    normalized_lines: list[str] = []
-    in_hunk = False
-
-    for raw_line in text.split("\n"):
-        stripped = raw_line.strip()
-        if stripped in PATCH_FENCE_LINES:
-            continue
-
-        left_trimmed = raw_line.lstrip(" ")
-        if left_trimmed.startswith("diff --git "):
-            normalized_lines.append(left_trimmed)
-            in_hunk = False
-            continue
-        if left_trimmed == "@@" or left_trimmed.startswith("@@ "):
-            normalized_lines.append(left_trimmed)
-            in_hunk = True
-            continue
-        if in_hunk:
-            normalized_lines.append(_normalize_hunk_line(raw_line))
-            continue
-        if any(left_trimmed.startswith(prefix) for prefix in PATCH_METADATA_PREFIXES):
-            normalized_lines.append(left_trimmed)
-            continue
-        normalized_lines.append(raw_line)
-
-    while normalized_lines and not normalized_lines[0].strip():
-        normalized_lines.pop(0)
-    while normalized_lines and not normalized_lines[-1].strip():
-        normalized_lines.pop()
-    return "\n".join(normalized_lines)
-
-
-def _validate_patch_shape(patch_text: str) -> None:
-    first_content_line = None
-    for raw_line in patch_text.splitlines():
-        stripped = raw_line.strip()
-        if not stripped:
-            continue
-        first_content_line = stripped
-        break
-    if first_content_line is None:
-        raise PatchApplyError("Patch is empty")
-    if not first_content_line.startswith("diff --git "):
-        raise PatchApplyError(
-            "Patch must contain only a Git unified diff and must start with `diff --git `"
-        )
-
-
-def _parse_diff_header(line: str) -> PatchTarget:
-    rest = line[len("diff --git ") :]
-    try:
-        parts = shlex.split(rest)
-    except ValueError as exc:
-        raise PatchApplyError(f"Failed to parse diff header: {line}") from exc
-    if len(parts) < 2:
-        raise PatchApplyError(f"Invalid diff header: {line}")
-    left, right = parts[0], parts[1]
-    if not left.startswith("a/") or not right.startswith("b/"):
-        raise PatchApplyError(f"Invalid diff header paths: {line}")
-    left_path = PurePosixPath(left[2:])
-    right_path = PurePosixPath(right[2:])
-    chosen = right_path if right_path.as_posix() != "/dev/null" else left_path
-    validate_repo_relative_path(chosen)
-    return PatchTarget(path=chosen, change_type="modify")
-
-
-def _dedupe_targets(targets: list[PatchTarget]) -> list[PatchTarget]:
-    seen: dict[str, PatchTarget] = {}
-    for target in targets:
-        key = target.path.as_posix()
-        if key in seen:
+def apply_search_replace_patch(
+    repo_root: Path,
+    payload: dict[str, object],
+    *,
+    allow_apply_on_dirty_files: bool,
+) -> PatchApplyResult:
+    plans = _parse_search_replace_payload(payload)
+    repo_relative_paths = [Path(*plan.path.parts) for plan in plans]
+    if not allow_apply_on_dirty_files:
+        dirty = list_dirty_paths(repo_root, repo_relative_paths)
+        if dirty:
+            dirty_text = ", ".join(sorted(dirty))
             raise PatchApplyError(
-                f"Patch touches the same path more than once: {key}. Split or merge the hunks into one diff section."
+                f"Refusing to apply patch because affected files are dirty: {dirty_text}"
             )
-        seen[key] = target
-    return list(seen.values())
 
+    writes: list[tuple[Path, str, str]] = []
+    add_paths: list[Path] = []
+    delete_paths: list[Path] = []
 
-def _verify_staged_paths(repo_root: Path, repo_relative_paths: list[Path]) -> None:
-    expected = {path.as_posix() for path in repo_relative_paths}
-    result = run_git(repo_root, ["diff", "--cached", "--name-only", "--", *[str(path) for path in repo_relative_paths]])
-    staged = {line.strip().replace("\\", "/") for line in result.stdout.splitlines() if line.strip()}
-    if staged != expected:
-        raise PatchApplyError(
-            "Patch verification failed after apply. "
-            f"Expected staged paths: {sorted(expected)}. Actual staged paths: {sorted(staged)}."
+    try:
+        for plan in plans:
+            repo_relative_path = Path(*plan.path.parts)
+            file_path = repo_root / repo_relative_path
+
+            if plan.operation == "create":
+                if file_path.exists():
+                    raise PatchApplyError(
+                        f"search_replace_v1 create target already exists: {plan.path.as_posix()}"
+                    )
+                writes.append((file_path, plan.content or "", "utf-8"))
+                add_paths.append(repo_relative_path)
+                continue
+
+            if not file_path.exists() or not file_path.is_file():
+                raise PatchApplyError(
+                    f"search_replace_v1 path does not exist or is not a file: {plan.path.as_posix()}"
+                )
+
+            raw_bytes = file_path.read_bytes()
+            if plan.expected_sha256:
+                actual_sha256 = hashlib.sha256(raw_bytes).hexdigest()
+                if actual_sha256 != plan.expected_sha256:
+                    raise PatchApplyError(
+                        f"search_replace_v1 sha256 mismatch for {plan.path.as_posix()}: "
+                        f"expected {plan.expected_sha256}, got {actual_sha256}"
+                    )
+
+            if plan.operation == "delete":
+                delete_paths.append(repo_relative_path)
+                continue
+
+            original_text, encoding = _decode_text_with_fallback(file_path, raw_bytes)
+            new_text = _apply_exact_replacements(original_text, plan)
+            writes.append((file_path, new_text, encoding))
+            add_paths.append(repo_relative_path)
+
+        for file_path, new_text, encoding in writes:
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            file_path.write_bytes(new_text.encode(encoding))
+
+        if delete_paths:
+            run_git(repo_root, ["rm", "--", *[str(path) for path in delete_paths]])
+        if add_paths:
+            run_git(repo_root, ["add", "--", *[str(path) for path in add_paths]])
+
+        status_summary = summarize_paths_status(repo_root, repo_relative_paths)
+        return PatchApplyResult(
+            affected_files=[plan.path.as_posix() for plan in plans],
+            git_status_summary=status_summary,
         )
+    except Exception as exc:  # noqa: BLE001
+        if isinstance(exc, PatchApplyError):
+            raise
+        raise PatchApplyError(str(exc)) from exc
 
 
-def _normalize_hunk_line(raw_line: str) -> str:
-    if raw_line.startswith((" ", "+", "-", "\\")):
-        return raw_line
+def _parse_search_replace_payload(payload: dict[str, object]) -> list[SearchReplaceFilePlan]:
+    files = payload.get("files")
+    if not isinstance(files, list) or not files:
+        raise PatchApplyError("search_replace_v1 payload must contain a non-empty files list")
+    plans: list[SearchReplaceFilePlan] = []
+    seen_paths: set[str] = set()
+    for file_entry in files:
+        if not isinstance(file_entry, dict):
+            raise PatchApplyError("Each search_replace_v1 file entry must be a mapping")
+        path_text = str(file_entry["path"])
+        path = validate_repo_relative_path(PurePosixPath(path_text.replace("\\", "/")))
+        key = path.as_posix()
+        if key in seen_paths:
+            raise PatchApplyError(f"search_replace_v1 touches the same path more than once: {key}")
+        seen_paths.add(key)
+        operation = str(file_entry.get("operation", "replace"))
+        if operation not in ALLOWED_FILE_OPERATIONS:
+            raise PatchApplyError(
+                "Each search_replace_v1 file entry must use operation replace, create, or delete"
+            )
+        expected_sha256 = file_entry.get("expected_sha256")
+        replacements: list[SearchReplaceOp] = []
+        content: str | None = None
 
-    left_trimmed = raw_line.lstrip(" ")
-    if left_trimmed.startswith(("+", "-", "\\")):
-        return left_trimmed
-    if not left_trimmed:
-        return " "
-    return f" {left_trimmed}"
+        if operation == "replace":
+            replacements_raw = file_entry.get("replacements")
+            if not isinstance(replacements_raw, list) or not replacements_raw:
+                raise PatchApplyError("Each replace operation must contain a non-empty replacements list")
+            for replacement_raw in replacements_raw:
+                if not isinstance(replacement_raw, dict):
+                    raise PatchApplyError("Each search_replace_v1 replacement must be a mapping")
+                search = replacement_raw.get("search")
+                replace = replacement_raw.get("replace")
+                if not isinstance(search, str) or not search:
+                    raise PatchApplyError("Each search_replace_v1 replacement must contain a non-empty search string")
+                if not isinstance(replace, str):
+                    raise PatchApplyError("Each search_replace_v1 replacement must contain a replace string")
+                expected_matches = int(replacement_raw.get("expected_matches", 1))
+                if expected_matches <= 0:
+                    raise PatchApplyError("search_replace_v1 expected_matches must be positive")
+                replacements.append(
+                    SearchReplaceOp(
+                        search=search,
+                        replace=replace,
+                        expected_matches=expected_matches,
+                    )
+                )
+        elif operation == "create":
+            if expected_sha256 is not None:
+                raise PatchApplyError("Create operations may not contain expected_sha256")
+            if "replacements" in file_entry:
+                raise PatchApplyError("Create operations may not contain replacements")
+            raw_content = file_entry.get("content")
+            if not isinstance(raw_content, str):
+                raise PatchApplyError("Each create operation must contain a content string")
+            content = raw_content
+        else:
+            if "replacements" in file_entry:
+                raise PatchApplyError("Delete operations may not contain replacements")
+            if "content" in file_entry:
+                raise PatchApplyError("Delete operations may not contain content")
 
-
-def _patch_apply_failure_message(message: str) -> str:
-    lowered = message.lower()
-    if "corrupt patch" in lowered:
-        return (
-            "Patch structurally invalid after normalization. "
-            "Ask the LLM to return only a Git unified diff, without Markdown fences, "
-            "and with a leading single space on unchanged lines inside each hunk. "
-            f"Git reported: {message}"
+        plans.append(
+            SearchReplaceFilePlan(
+                path=path,
+                operation=operation,
+                expected_sha256=str(expected_sha256).strip() if expected_sha256 is not None else None,
+                replacements=replacements,
+                content=content,
+            )
         )
-    return message
+    return plans
+
+
+def _apply_exact_replacements(original_text: str, plan: SearchReplaceFilePlan) -> str:
+    normalized_text = _normalize_text_newlines(original_text)
+    current_text = normalized_text
+    for replacement in plan.replacements:
+        search = _normalize_text_newlines(replacement.search)
+        replace = _normalize_text_newlines(replacement.replace)
+        found = current_text.count(search)
+        if found != replacement.expected_matches:
+            raise PatchApplyError(
+                f"search_replace_v1 expected {replacement.expected_matches} match(es) in "
+                f"{plan.path.as_posix()}, found {found}"
+            )
+        current_text = current_text.replace(search, replace)
+    if current_text == normalized_text:
+        raise PatchApplyError(f"search_replace_v1 produced no changes for {plan.path.as_posix()}")
+    newline = _detect_newline_style(original_text)
+    return current_text.replace("\n", newline)
+
+
+def _decode_text_with_fallback(path: Path, raw: bytes) -> tuple[str, str]:
+    for encoding in TEXT_ENCODINGS:
+        try:
+            return raw.decode(encoding), encoding
+        except UnicodeDecodeError:
+            continue
+    raise PatchApplyError(f"Could not decode file as text: {path}")
+
+
+def _detect_newline_style(text: str) -> str:
+    if "\r\n" in text:
+        return "\r\n"
+    return "\n"
+
+
+def _normalize_text_newlines(text: str) -> str:
+    return text.replace("\r\n", "\n").replace("\r", "\n")

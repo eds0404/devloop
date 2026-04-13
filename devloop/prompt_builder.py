@@ -34,7 +34,10 @@ def build_bootstrap_prompt(repo_name: str, human_language_name: str) -> str:
     return template.substitute(
         repo_name=repo_name,
         human_language_name=human_language_name,
-        protocol_rules=load_protocol_rules_text(human_language_name),
+        protocol_reference_section=render_section(
+            "Full protocol reference",
+            load_protocol_reference_text(human_language_name),
+        ),
     )
 
 
@@ -46,6 +49,7 @@ def build_context_prompt(
     human_language_name: str,
     sections: list[PromptSection],
     max_chars: int,
+    include_protocol_reference: bool = True,
 ) -> PromptBuildResult:
     template = Template(load_template_text("context_prompt.txt"))
     preamble = template.substitute(
@@ -53,7 +57,10 @@ def build_context_prompt(
         current_goal=current_goal or "Continue with the next smallest useful step.",
         source_label=source_label,
         human_language_name=human_language_name,
-        protocol_rules=load_protocol_rules_text(human_language_name),
+        protocol_reference_section=build_protocol_reference_section(
+            human_language_name,
+            include_protocol_reference,
+        ),
         context_sections="${context_sections}",
     )
     preamble = preamble.replace("${context_sections}", "").rstrip()
@@ -126,6 +133,24 @@ def render_section(title: str, body: str | None) -> str:
 def load_protocol_rules_text(human_language_name: str) -> str:
     template = Template(load_template_text("protocol_rules.txt"))
     return template.substitute(human_language_name=human_language_name)
+
+
+def load_protocol_reference_text(human_language_name: str) -> str:
+    template = Template(load_template_text("protocol_reference.txt"))
+    return template.substitute(human_language_name=human_language_name)
+
+
+def build_protocol_reference_section(human_language_name: str, include_full_reference: bool) -> str:
+    if include_full_reference:
+        return render_section("Full protocol reference", load_protocol_reference_text(human_language_name))
+    return render_section(
+        "Protocol reminder",
+        (
+            "The full protocol reference is intentionally omitted in this prompt to save space. "
+            "Follow the same devloop machine block markers, command allowlist, YAML schema, "
+            "and payload rules exactly as in the previous prompts."
+        ),
+    )
 
 
 def build_truncation_report(omitted_titles: list[str], shortened_titles: list[str]) -> str:

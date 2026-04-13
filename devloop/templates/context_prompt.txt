@@ -10,7 +10,7 @@ Important constraints:
 - Prefer minimal patches.
 - Do not assume omitted context.
 
-${protocol_rules}
+${protocol_reference_section}
 
 Task summary: ${task_summary}
 Current goal: ${current_goal}

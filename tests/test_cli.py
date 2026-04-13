@@ -2,10 +2,16 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from devloop.cli import _build_arg_parser, _maybe_add_project_tree_summary, _resolve_detection
+from devloop.cli import (
+    _build_arg_parser,
+    _maybe_add_project_tree_summary,
+    _resolve_detection,
+    _should_include_full_protocol_reference,
+)
 from devloop.config import DevloopConfig
 from devloop.detector import ClipboardKind
 from devloop.retrieval import QueryResult
+from devloop.session import SessionState
 
 
 class CliTests(unittest.TestCase):
@@ -46,6 +52,19 @@ class CliTests(unittest.TestCase):
         self.assertEqual(len(query_results), 2)
         self.assertEqual(query_results[-1].query_type, "project_tree")
         retriever.project_tree_summary.assert_called_once()
+
+    def test_full_protocol_reference_is_included_every_other_followup_prompt(self) -> None:
+        session = SessionState(
+            repo_root=str(Path(__file__).resolve().parents[1]),
+            session_id="test-session",
+            initialized=True,
+            last_run_at="2026-01-01T00:00:00+00:00",
+        )
+        self.assertTrue(_should_include_full_protocol_reference(session))
+        session.note_followup_prompt_generated()
+        self.assertFalse(_should_include_full_protocol_reference(session))
+        session.note_followup_prompt_generated()
+        self.assertTrue(_should_include_full_protocol_reference(session))
 
 
 if __name__ == "__main__":

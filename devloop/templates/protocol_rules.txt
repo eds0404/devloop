@@ -99,21 +99,22 @@ next_step_human: "..."
 task_summary_en: "..."
 current_goal_en: "..."
 payload:
-  patch_format: "git_unified_diff"
-  patch: |
-    diff --git a/src/main/scala/com/acme/Parser.scala b/src/main/scala/com/acme/Parser.scala
-    --- a/src/main/scala/com/acme/Parser.scala
-    +++ b/src/main/scala/com/acme/Parser.scala
-    @@
-    -old line
-    +new line
+  patch_format: "search_replace_v1"
+  files:
+    - path: "src/main/scala/com/acme/Parser.scala"
+      replacements:
+        - search: |
+            old line
+          replace: |
+            new line
+          expected_matches: 1
 <<<DEVLOOP_COMMAND_END>>>
 
 Additional APPLY_PATCH rules:
-- Put only the unified diff inside `payload.patch`.
-- Do not add explanations, markdown fences, or comments inside `payload.patch`.
+- Use only `patch_format: "search_replace_v1"`.
+- Use `payload.files` with explicit file operations.
+- For replace operations, each replacement must contain exact `search`, desired `replace`, and explicit `expected_matches`.
+- For create operations, use `content` and omit `replacements`.
+- For delete operations, omit `replacements` and `content`.
 - Touch only the smallest necessary set of files.
 - Do not emit the same file twice in one patch.
-- Inside each hunk, every unchanged context line must start with a single leading space.
-- Inside each hunk, every line must start with one of these prefixes: space, `+`, `-`, or `\`.
-- Never paste raw source lines inside a hunk without the required unified-diff prefix.

@@ -1,0 +1,164 @@
+Machine protocol is mandatory for every reply.
+
+Return exactly one machine-readable block between these exact markers:
+<<<DEVLOOP_COMMAND_START>>>
+... YAML content ...
+<<<DEVLOOP_COMMAND_END>>>
+
+Hard rules:
+- Do not use Markdown code fences inside the command block.
+- Use YAML only.
+- Use spaces only, not tabs.
+- Use exactly these top-level fields and nothing else:
+  - version
+  - command
+  - summary_human
+  - next_step_human
+  - task_summary_en
+  - current_goal_en
+  - payload
+- `payload` is always the last top-level field.
+- Keep `summary_human` and `next_step_human` in ${human_language_name}.
+- Keep `task_summary_en` and `current_goal_en` in English.
+
+Indentation rules:
+- Every field nested under `payload:` must be indented by two spaces.
+- Every list item nested under a payload field must be indented by four spaces.
+- Never write `payload:` and then start sibling fields on the next line with the same indentation.
+
+Supported commands:
+- `COLLECT_CONTEXT`: request deterministic local repository context.
+- `APPLY_PATCH`: return a single exact structured patch to apply locally.
+- `ASK_HUMAN`: ask the human to run build/test/manual verification or provide missing business context.
+- `DONE`: no more local tool actions are needed.
+
+COLLECT_CONTEXT query types and fields:
+- `project_tree`
+  Additional fields: none.
+- `file_search`
+  Required fields: `query`
+  Optional fields: `limit`
+- `path_search`
+  Required fields: `query`
+  Optional fields: `limit`
+- `text_search`
+  Required fields: `query`
+  Optional fields: `glob`, `limit`
+- `regex_search`
+  Required fields: `query`
+  Optional fields: `glob`, `limit`
+- `read_file`
+  Required fields: `file`
+- `read_snippet`
+  Required fields: `file`, `start_line`, `end_line`
+- `read_around_match`
+  Required fields: `query`
+  Optional fields: `glob`, `before`, `after`, `limit`
+- `related_files`
+  Required fields: `query`
+- `related_tests`
+  Required fields: `query`
+
+COLLECT_CONTEXT rules:
+- Ask for the smallest useful context.
+- Prefer direct file/snippet reads over broad scans.
+- Request `project_tree` only when repository structure is genuinely needed.
+
+APPLY_PATCH rules:
+- The only supported `payload.patch_format` value is `search_replace_v1`.
+- Use `payload.files`.
+- Each file entry must contain `path`.
+- `operation` is optional and defaults to `replace`.
+- Allowed `operation` values:
+  - `replace`
+  - `create`
+  - `delete`
+- `expected_sha256` is optional for `replace` and `delete`, and is recommended when the current file content is available.
+- For `replace`:
+  - `replacements` is required.
+  - Each replacement must contain `search`, `replace`, and `expected_matches`.
+  - `search` must be exact current text from the repository context.
+  - `expected_matches` must be explicit.
+- For `create`:
+  - `content` is required.
+  - Do not include `replacements`.
+- For `delete`:
+  - Do not include `replacements`.
+  - Do not include `content`.
+- Touch only the smallest necessary set of files.
+- Do not emit the same file twice in one patch.
+
+ASK_HUMAN rules:
+- Use this when the human must run `sbt compile`, `sbt test`, a focused test command, verify behavior manually, or answer a domain question.
+- `payload` may include `requested_runs` and `expected_artifacts_from_human`.
+
+DONE rules:
+- Use this when no further tool action is needed.
+- `payload` should usually be `{}`.
+
+Examples:
+
+ASK_HUMAN:
+<<<DEVLOOP_COMMAND_START>>>
+version: "1"
+command: "ASK_HUMAN"
+summary_human: "..."
+next_step_human: "..."
+task_summary_en: "..."
+current_goal_en: "..."
+payload:
+  requested_runs:
+    - kind: "sbt"
+      purpose: "..."
+      command_example: "sbt test"
+<<<DEVLOOP_COMMAND_END>>>
+
+DONE:
+<<<DEVLOOP_COMMAND_START>>>
+version: "1"
+command: "DONE"
+summary_human: "..."
+next_step_human: "..."
+task_summary_en: "..."
+current_goal_en: "..."
+payload: {}
+<<<DEVLOOP_COMMAND_END>>>
+
+COLLECT_CONTEXT:
+<<<DEVLOOP_COMMAND_START>>>
+version: "1"
+command: "COLLECT_CONTEXT"
+summary_human: "..."
+next_step_human: "..."
+task_summary_en: "..."
+current_goal_en: "..."
+payload:
+  prompt_goal: "Diagnose the issue and propose the smallest safe next step."
+  queries:
+    - type: "read_snippet"
+      file: "src/main/scala/com/acme/Parser.scala"
+      start_line: 10
+      end_line: 40
+    - type: "related_tests"
+      query: "Parser"
+<<<DEVLOOP_COMMAND_END>>>
+
+APPLY_PATCH:
+<<<DEVLOOP_COMMAND_START>>>
+version: "1"
+command: "APPLY_PATCH"
+summary_human: "..."
+next_step_human: "..."
+task_summary_en: "..."
+current_goal_en: "..."
+payload:
+  patch_format: "search_replace_v1"
+  files:
+    - path: "src/main/scala/com/acme/Parser.scala"
+      replacements:
+        - search: |
+            import play.api.libs.json.Json
+          replace: |
+            import io.circe.syntax._
+          expected_matches: 1
+<<<DEVLOOP_COMMAND_END>>>

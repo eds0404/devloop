@@ -6,7 +6,7 @@ import uuid
 
 from devloop.cli import _build_arg_parser, _load_session_for_run
 from devloop.errors import SessionError
-from devloop.session import SessionStore
+from devloop.session import SessionState, SessionStore
 from devloop import yaml_compat as yaml
 
 
@@ -76,6 +76,17 @@ class SessionTests(unittest.TestCase):
         parsed = yaml.safe_load(text)
         self.assertEqual(parsed["last_parsed_llm_response"], {})
         self.assertEqual(parsed["command_history_summary"], [])
+
+    def test_session_round_trips_followup_prompt_count(self) -> None:
+        session = {
+            "repo_root": "C:\\repo",
+            "session_id": "session-id",
+            "initialized": True,
+            "last_run_at": "2026-01-01T00:00:00+00:00",
+            "followup_prompt_count": 3,
+        }
+        restored = SessionState.from_dict(session)
+        self.assertEqual(restored.followup_prompt_count, 3)
 
 
 if __name__ == "__main__":

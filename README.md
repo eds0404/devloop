@@ -96,6 +96,7 @@ An explicit `project_tree` request from the LLM still returns the full configure
 
 All prompts generated for ChatGPT are in English.
 Console output shown to the human follows `human_language` and currently supports `ru` and `en`.
+The first bootstrap prompt always includes the full protocol/capability reference. Follow-up prompts include the same full reference every other prompt to save space, with a short reminder on the alternating prompts.
 
 ## Supported Commands
 
@@ -118,7 +119,7 @@ Supported query types:
 
 ### `APPLY_PATCH`
 
-Applies a validated Git unified diff inside the repository root. After a successful apply, `devloop` updates the Git index for affected paths so file creation and deletion are reflected correctly.
+Applies a validated structured `search_replace_v1` patch inside the repository root. The tool performs exact text replacement for existing files and can also create or delete files through explicit file operations. After a successful apply, `devloop` updates the Git index for affected paths.
 
 ### `ASK_HUMAN`
 
@@ -160,24 +161,24 @@ For backward compatibility, the parser still accepts legacy `summary_ru` and `ne
 - No arbitrary shell execution from the LLM
 - No network access from the tool
 - Repository-root sandbox for file reads and patch writes
-- Git patch validation before apply
+- Structured patch validation before apply
 - Refusal on unsafe or ambiguous paths
 - Refusal on dirty affected files by default
 - No local backup copies inside the project tree
 - Manual compile and test runs only
 
-## Git-Based Patch Workflow
+## Patch Workflow
 
-`APPLY_PATCH` uses Git-aware validation and application:
+`APPLY_PATCH` uses one structured format, `search_replace_v1`, with Git-aware staging:
 
-1. Extract affected paths from the unified diff.
-2. Reject patches that contain prose before `diff --git` or touch the same path more than once.
-3. Reject paths outside the repository root or `.git` internals.
-4. Reject rename and binary patches in the MVP.
-5. Check for dirty affected files unless `allow_apply_on_dirty_files: true`.
-6. Run `git apply --check --index`.
-7. Run `git apply --index`.
-8. Verify that the staged changed paths exactly match the paths declared in the diff.
+1. Validate `payload.patch_format == search_replace_v1`.
+2. Validate every repository-relative path and reject `.git` internals or path escapes.
+3. Reject duplicate file entries in the same patch.
+4. For `replace` operations, require exact `search` text and explicit `expected_matches`.
+5. For `create` operations, require explicit `content`.
+6. For `delete` operations, require an explicit delete file operation instead of an implicit diff.
+7. Check for dirty affected files unless `allow_apply_on_dirty_files: true`.
+8. Write only the validated target files and stage them with Git.
 
 ## Scala/sbt Log Parsing
 
@@ -213,4 +214,5 @@ py -3.11 -m unittest discover -s tests -v
 - `prompt_language` uses short codes and is currently fixed to `en`.
 - `human_language` uses short codes and currently supports `ru` and `en`.
 - Session metadata outside the repository is treated as an explicit exception to the no-write-outside-repo rule. Repository file changes still happen only through validated patch application.
+- `APPLY_PATCH` now uses a single structured patch format, `search_replace_v1`, instead of Git unified diff. This makes the LLM contract narrower and substantially more reliable for clipboard-driven workflows.
 - The MVP intentionally does not implement RAG, embeddings, LSP integration, SemanticDB, or autonomous command execution.

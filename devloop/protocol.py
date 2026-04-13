@@ -5,7 +5,7 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass
 import re
-from typing import Any
+from typing import Any, Iterable
 
 from devloop.errors import ProtocolError
 from devloop import yaml_compat as yaml
@@ -36,6 +36,8 @@ SUPPORTED_QUERY_TYPES = {
     "related_files",
     "related_tests",
 }
+SUPPORTED_PATCH_FORMAT = "search_replace_v1"
+SUPPORTED_PATCH_OPERATIONS = {"replace", "create", "delete"}
 
 
 @dataclass(slots=True)
@@ -173,11 +175,64 @@ def _validate_collect_context_payload(payload: dict[str, Any]) -> None:
 
 def _validate_apply_patch_payload(payload: dict[str, Any]) -> None:
     patch_format = payload.get("patch_format")
-    patch = payload.get("patch")
-    if patch_format != "git_unified_diff":
-        raise ProtocolError("Only patch_format=git_unified_diff is supported")
-    if not isinstance(patch, str) or not patch.strip():
-        raise ProtocolError("APPLY_PATCH payload must contain a non-empty patch string")
+    if patch_format != SUPPORTED_PATCH_FORMAT:
+        raise ProtocolError("Only patch_format=search_replace_v1 is supported")
+
+    files = payload.get("files")
+    if not isinstance(files, list) or not files:
+        raise ProtocolError("search_replace_v1 payload must contain a non-empty files list")
+    for file_entry in files:
+        if not isinstance(file_entry, dict):
+            raise ProtocolError("Each search_replace_v1 file entry must be a mapping")
+        path = file_entry.get("path")
+        if not isinstance(path, str) or not path.strip():
+            raise ProtocolError("Each search_replace_v1 file entry must define a non-empty path")
+        operation = str(file_entry.get("operation", "replace"))
+        if operation not in SUPPORTED_PATCH_OPERATIONS:
+            raise ProtocolError(
+                "Each search_replace_v1 file entry must use operation replace, create, or delete"
+            )
+        expected_sha256 = file_entry.get("expected_sha256")
+        if expected_sha256 is not None and (not isinstance(expected_sha256, str) or not expected_sha256.strip()):
+            raise ProtocolError("expected_sha256 must be a non-empty string when present")
+        if operation == "replace":
+            if "content" in file_entry:
+                raise ProtocolError("Replace operations may not contain content")
+            replacements = file_entry.get("replacements")
+            if not isinstance(replacements, list) or not replacements:
+                raise ProtocolError("Each replace operation must contain a non-empty replacements list")
+            for replacement in replacements:
+                if not isinstance(replacement, dict):
+                    raise ProtocolError("Each search_replace_v1 replacement must be a mapping")
+                search = replacement.get("search")
+                replace = replacement.get("replace")
+                expected_matches = replacement.get("expected_matches", 1)
+                if not isinstance(search, str) or not search:
+                    raise ProtocolError("Each search_replace_v1 replacement must contain a non-empty search string")
+                if not isinstance(replace, str):
+                    raise ProtocolError("Each search_replace_v1 replacement must contain a replace string")
+                try:
+                    expected_matches_int = int(expected_matches)
+                except (TypeError, ValueError) as exc:
+                    raise ProtocolError("expected_matches must be an integer") from exc
+                if expected_matches_int <= 0:
+                    raise ProtocolError("expected_matches must be positive")
+            continue
+
+        if operation == "create":
+            if expected_sha256 is not None:
+                raise ProtocolError("Create operations may not contain expected_sha256")
+            if "replacements" in file_entry:
+                raise ProtocolError("Create operations may not contain replacements")
+            content = file_entry.get("content")
+            if not isinstance(content, str):
+                raise ProtocolError("Each create operation must contain a content string")
+            continue
+
+        if "replacements" in file_entry:
+            raise ProtocolError("Delete operations may not contain replacements")
+        if "content" in file_entry:
+            raise ProtocolError("Delete operations may not contain content")
 
 
 def _strip_command_block(response_text: str, raw_block: str) -> str:
@@ -311,31 +366,110 @@ def _extract_relaxed_top_level_fields(raw_block: str) -> dict[str, Any] | None:
 
 
 def _parse_relaxed_apply_patch_payload(payload_text: str) -> dict[str, Any] | None:
-    patch_format: str | None = None
-    patch: str | None = None
-    lines = payload_text.splitlines()
+    normalized_payload = _normalize_relaxed_search_replace_payload(payload_text)
+    if normalized_payload:
+        parsed = _try_parse_relaxed_payload_mapping(normalized_payload)
+        if parsed is not None:
+            return parsed
 
-    for index, raw_line in enumerate(lines):
+    parsed = _try_parse_relaxed_payload_mapping(payload_text)
+    if parsed is not None:
+        return parsed
+    return None
+
+
+def _try_parse_relaxed_payload_mapping(payload_text: str) -> dict[str, Any] | None:
+    if not payload_text.strip():
+        return None
+    try:
+        parsed = yaml.safe_load(payload_text)
+    except yaml.YAMLError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _normalize_relaxed_search_replace_payload(payload_text: str) -> str:
+    normalized_lines: list[str] = []
+    block_indent: int | None = None
+    state = "top"
+
+    for raw_line in payload_text.splitlines():
         stripped = raw_line.strip()
+        if block_indent is not None:
+            if stripped and _is_search_replace_control_line(stripped):
+                block_indent = None
+            else:
+                if not stripped:
+                    normalized_lines.append("")
+                else:
+                    current_indent = len(raw_line) - len(raw_line.lstrip(" "))
+                    if current_indent < block_indent:
+                        normalized_lines.append((" " * (block_indent - current_indent)) + raw_line)
+                    else:
+                        normalized_lines.append(raw_line)
+                continue
+
         if not stripped:
+            normalized_lines.append("")
             continue
         if stripped.startswith("patch_format:"):
-            patch_format = str(_parse_relaxed_scalar(stripped.split(":", 1)[1].strip()))
+            normalized_lines.append(f"patch_format: {stripped.split(':', 1)[1].strip()}")
+            state = "top"
             continue
-        if stripped.startswith("patch:"):
-            after_colon = stripped.split(":", 1)[1].strip()
-            if after_colon in {"|", "|-", "|+"}:
-                patch = "\n".join(lines[index + 1 :]).rstrip("\n")
-            else:
-                patch = after_colon
-            break
+        if stripped == "files:":
+            normalized_lines.append("files:")
+            state = "files"
+            continue
+        if stripped.startswith("- path:"):
+            normalized_lines.append(f"  {stripped}")
+            state = "file"
+            continue
+        if state == "file" and _starts_with_key(stripped, "replacements"):
+            normalized_lines.append("    replacements:")
+            state = "replacements"
+            continue
+        if state == "file" and _starts_with_any_key(stripped, {"operation", "expected_sha256", "content"}):
+            normalized_lines.append(f"    {stripped}")
+            if _is_block_scalar_field(stripped):
+                block_indent = 6
+            continue
+        if state in {"file", "replacements"} and stripped.startswith("- search:"):
+            normalized_lines.append(f"      {stripped}")
+            state = "replacement"
+            if _is_block_scalar_field(stripped):
+                block_indent = 10
+            continue
+        if state == "replacement" and _starts_with_any_key(stripped, {"replace", "expected_matches"}):
+            normalized_lines.append(f"        {stripped}")
+            if _is_block_scalar_field(stripped):
+                block_indent = 10
+            continue
+        normalized_lines.append(raw_line)
 
-    if patch_format is None or patch is None:
-        return None
-    return {
-        "patch_format": patch_format,
-        "patch": patch,
-    }
+    return "\n".join(normalized_lines).strip()
+
+
+def _is_search_replace_control_line(stripped: str) -> bool:
+    if stripped == "files:":
+        return True
+    if stripped.startswith("- path:") or stripped.startswith("- search:"):
+        return True
+    return _starts_with_any_key(
+        stripped,
+        {"patch_format", "operation", "expected_sha256", "content", "replacements", "replace", "expected_matches"},
+    )
+
+
+def _starts_with_any_key(stripped: str, keys: Iterable[str]) -> bool:
+    return any(_starts_with_key(stripped, key) for key in keys)
+
+
+def _starts_with_key(stripped: str, key: str) -> bool:
+    return stripped == f"{key}:" or stripped.startswith(f"{key}: ")
+
+
+def _is_block_scalar_field(stripped: str) -> bool:
+    return stripped.endswith("|") or stripped.endswith("|-") or stripped.endswith("|+")
 
 
 def _parse_relaxed_scalar(value_text: str) -> Any:

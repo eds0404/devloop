@@ -16,6 +16,20 @@ class PromptBuilderTests(unittest.TestCase):
         self.assertIn("Machine protocol is mandatory for every reply.", result.text)
         self.assertIn("<<<DEVLOOP_COMMAND_START>>>", result.text)
         self.assertIn("Every field nested under `payload:` must be indented by two spaces.", result.text)
+        self.assertIn("read_around_match", result.text)
+
+    def test_can_replace_full_protocol_reference_with_short_reminder(self) -> None:
+        result = build_context_prompt(
+            task_summary="Task",
+            current_goal="Goal",
+            source_label="unit test",
+            human_language_name="Russian",
+            sections=[PromptSection("Important", "Body", required=True)],
+            max_chars=4000,
+            include_protocol_reference=False,
+        )
+        self.assertIn("The full protocol reference is intentionally omitted", result.text)
+        self.assertNotIn("read_around_match", result.text)
 
     def test_reports_truncation_at_section_boundaries(self) -> None:
         sections = [

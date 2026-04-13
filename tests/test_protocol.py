@@ -120,6 +120,7 @@ command_example: "sbt 'core/IntegrationTest/test'"
         self.assertEqual(envelope.command.command, "ASK_HUMAN")
         self.assertIn("requested_runs", envelope.command.payload["raw_payload_text"])
 
+    @unittest.skip("legacy unified diff support removed")
     def test_relaxed_parser_accepts_apply_patch_payload(self) -> None:
         malformed = """
 Patch ready.
@@ -147,6 +148,7 @@ patch: |
         self.assertEqual(envelope.command.payload["patch_format"], "git_unified_diff")
         self.assertIn("diff --git", envelope.command.payload["patch"])
 
+    @unittest.skip("legacy unified diff support removed")
     def test_relaxed_parser_accepts_realistic_malformed_apply_patch_block(self) -> None:
         malformed = """
 Patch ready.
@@ -177,6 +179,33 @@ import com.acme.LegacyJson
         self.assertEqual(envelope.command.payload["patch_format"], "git_unified_diff")
         self.assertIn("DayEndCommandsSpec.scala", envelope.command.payload["patch"])
         self.assertIn("```", envelope.command.payload["patch"])
+
+    def test_parses_search_replace_apply_patch_payload(self) -> None:
+        response = """
+Patch ready.
+
+<<<DEVLOOP_COMMAND_START>>>
+version: "1"
+command: "APPLY_PATCH"
+summary_human: "Apply the safer structured patch."
+next_step_human: "Run compile."
+task_summary_en: "Replace the leftover Play JSON usage."
+current_goal_en: "Apply exact source replacements."
+payload:
+  patch_format: "search_replace_v1"
+  files:
+    - path: "src/main/scala/com/acme/Parser.scala"
+      replacements:
+        - search: |
+            import play.api.libs.json.Json
+          replace: |
+            import io.circe.syntax._
+          expected_matches: 1
+<<<DEVLOOP_COMMAND_END>>>
+""".strip()
+        envelope = parse_protocol_response(response)
+        self.assertEqual(envelope.command.payload["patch_format"], "search_replace_v1")
+        self.assertEqual(envelope.command.payload["files"][0]["path"], "src/main/scala/com/acme/Parser.scala")
 
 
 if __name__ == "__main__":
