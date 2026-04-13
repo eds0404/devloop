@@ -2,7 +2,7 @@ from pathlib import PurePosixPath
 import unittest
 
 from devloop.errors import PatchApplyError
-from devloop.patch_apply import extract_patch_targets, validate_repo_relative_path
+from devloop.patch_apply import extract_patch_targets, normalize_patch_text, validate_repo_relative_path
 
 
 PATCH_TEXT = """
@@ -37,6 +37,23 @@ class PatchApplyTests(unittest.TestCase):
         with self.assertRaises(PatchApplyError) as context:
             extract_patch_targets(duplicate)
         self.assertIn("same path more than once", str(context.exception))
+
+    def test_normalizes_markdown_fences_and_missing_context_prefixes(self) -> None:
+        malformed = """
+```diff
+diff --git a/src/main/scala/com/acme/Parser.scala b/src/main/scala/com/acme/Parser.scala
+--- a/src/main/scala/com/acme/Parser.scala
++++ b/src/main/scala/com/acme/Parser.scala
+@@ -1,3 +1,3 @@
+import com.acme.Parser
+-old
++new
+```
+""".strip()
+        normalized = normalize_patch_text(malformed)
+        self.assertNotIn("```", normalized)
+        self.assertIn("\n import com.acme.Parser\n", normalized)
+        self.assertTrue(normalized.startswith("diff --git "))
 
 
 if __name__ == "__main__":

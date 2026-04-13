@@ -147,6 +147,37 @@ patch: |
         self.assertEqual(envelope.command.payload["patch_format"], "git_unified_diff")
         self.assertIn("diff --git", envelope.command.payload["patch"])
 
+    def test_relaxed_parser_accepts_realistic_malformed_apply_patch_block(self) -> None:
+        malformed = """
+Patch ready.
+
+<<<DEVLOOP_COMMAND_START>>>
+version: "1"
+command: "APPLY_PATCH"
+summary_human: "Apply the patch."
+next_step_human: "Run compile."
+task_summary_en: "Fix the remaining integration-test compile issue."
+current_goal_en: "Remove the leftover Play JSON usage."
+payload:
+patch_format: "git_unified_diff"
+patch: |
+diff --git a/external-api/src/it/scala/com/acme/DayEndCommandsSpec.scala b/external-api/src/it/scala/com/acme/DayEndCommandsSpec.scala
+--- a/external-api/src/it/scala/com/acme/DayEndCommandsSpec.scala
++++ b/external-api/src/it/scala/com/acme/DayEndCommandsSpec.scala
+@@ -1,4 +1,4 @@
+import com.acme.LegacyJson
++import io.circe.syntax._
+-import play.api.libs.json.Json
+```
+ import java.time.Instant
+<<<DEVLOOP_COMMAND_END>>>
+""".strip()
+        envelope = parse_protocol_response(malformed)
+        self.assertEqual(envelope.command.command, "APPLY_PATCH")
+        self.assertEqual(envelope.command.payload["patch_format"], "git_unified_diff")
+        self.assertIn("DayEndCommandsSpec.scala", envelope.command.payload["patch"])
+        self.assertIn("```", envelope.command.payload["patch"])
+
 
 if __name__ == "__main__":
     unittest.main()

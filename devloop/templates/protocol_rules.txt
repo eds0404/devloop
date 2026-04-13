@@ -114,3 +114,6 @@ Additional APPLY_PATCH rules:
 - Do not add explanations, markdown fences, or comments inside `payload.patch`.
 - Touch only the smallest necessary set of files.
 - Do not emit the same file twice in one patch.
+- Inside each hunk, every unchanged context line must start with a single leading space.
+- Inside each hunk, every line must start with one of these prefixes: space, `+`, `-`, or `\`.
+- Never paste raw source lines inside a hunk without the required unified-diff prefix.

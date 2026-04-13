@@ -17,6 +17,7 @@ exclude_globs:
 snippet_context_before: 25
 snippet_context_after: 40
 project_packages: []
+include_project_summary_in_prompts: false
 allow_apply_on_dirty_files: false
 state_dir_mode: localappdata
 prompt_language: en

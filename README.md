@@ -72,14 +72,18 @@ exclude_globs:
 snippet_context_before: 25
 snippet_context_after: 40
 project_packages: []
+include_project_summary_in_prompts: false
 allow_apply_on_dirty_files: false
 state_dir_mode: localappdata
 prompt_language: en
 human_language: ru
 ```
 
+By default, `devloop` does not append a project tree summary to every generated prompt. Set `include_project_summary_in_prompts: true` only if you explicitly want that extra context in compile/test/raw follow-up prompts.
+
 Session metadata is stored outside the repository under `%LOCALAPPDATA%\devloop\repos\<hash>\session.yaml`.
 If the session file becomes corrupted, use `--reset-session`, or run `--force-bootstrap` to regenerate the protocol prompt and automatically recover from a broken session file.
+An explicit `project_tree` request from the LLM still returns the full configured project tree summary even when `include_project_summary_in_prompts` is `false`.
 
 ## Clipboard-Based Loop
 

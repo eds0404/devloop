@@ -26,6 +26,11 @@ class ConfigTests(unittest.TestCase):
         text = default_config_text()
         self.assertIn("prompt_language: en", text)
         self.assertIn("human_language: ru", text)
+        self.assertIn("include_project_summary_in_prompts: false", text)
+
+    def test_project_summary_is_disabled_by_default(self) -> None:
+        config = DevloopConfig(project_root=Path(__file__).resolve().parents[1])
+        self.assertFalse(config.include_project_summary_in_prompts)
 
 
 if __name__ == "__main__":

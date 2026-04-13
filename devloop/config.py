@@ -44,6 +44,7 @@ class DevloopConfig:
     snippet_context_before: int = 25
     snippet_context_after: int = 40
     project_packages: list[str] = field(default_factory=list)
+    include_project_summary_in_prompts: bool = False
     allow_apply_on_dirty_files: bool = False
     state_dir_mode: str = "localappdata"
     prompt_language: str = "en"
@@ -116,6 +117,7 @@ def load_config(path: Path) -> DevloopConfig:
         snippet_context_before=int(data.get("snippet_context_before", 25)),
         snippet_context_after=int(data.get("snippet_context_after", 40)),
         project_packages=_read_string_list(data.get("project_packages"), []),
+        include_project_summary_in_prompts=bool(data.get("include_project_summary_in_prompts", False)),
         allow_apply_on_dirty_files=bool(data.get("allow_apply_on_dirty_files", False)),
         state_dir_mode=str(data.get("state_dir_mode", "localappdata")),
         prompt_language=str(data.get("prompt_language", "en")),
@@ -138,6 +140,7 @@ def default_config_text() -> str:
         "snippet_context_before": 25,
         "snippet_context_after": 40,
         "project_packages": [],
+        "include_project_summary_in_prompts": False,
         "allow_apply_on_dirty_files": False,
         "state_dir_mode": "localappdata",
         "prompt_language": "en",

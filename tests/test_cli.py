@@ -1,7 +1,11 @@
 import unittest
+from pathlib import Path
+from unittest import mock
 
-from devloop.cli import _build_arg_parser, _resolve_detection
+from devloop.cli import _build_arg_parser, _maybe_add_project_tree_summary, _resolve_detection
+from devloop.config import DevloopConfig
 from devloop.detector import ClipboardKind
+from devloop.retrieval import QueryResult
 
 
 class CliTests(unittest.TestCase):
@@ -21,6 +25,27 @@ class CliTests(unittest.TestCase):
         detection, forced = _resolve_detection("plain text", "auto")
         self.assertFalse(forced)
         self.assertEqual(detection.kind, ClipboardKind.RAW_TEXT)
+
+    def test_does_not_add_project_summary_by_default(self) -> None:
+        config = DevloopConfig(project_root=Path(__file__).resolve().parents[1])
+        retriever = mock.Mock()
+        query_results = [QueryResult("raw_clipboard", "Raw clipboard content", "body")]
+        _maybe_add_project_tree_summary(query_results, retriever, config)
+        self.assertEqual(len(query_results), 1)
+        retriever.project_tree_summary.assert_not_called()
+
+    def test_adds_project_summary_when_enabled(self) -> None:
+        config = DevloopConfig(
+            project_root=Path(__file__).resolve().parents[1],
+            include_project_summary_in_prompts=True,
+        )
+        retriever = mock.Mock()
+        retriever.project_tree_summary.return_value = "- src/main/scala/App.scala"
+        query_results = [QueryResult("raw_clipboard", "Raw clipboard content", "body")]
+        _maybe_add_project_tree_summary(query_results, retriever, config)
+        self.assertEqual(len(query_results), 2)
+        self.assertEqual(query_results[-1].query_type, "project_tree")
+        retriever.project_tree_summary.assert_called_once()
 
 
 if __name__ == "__main__":

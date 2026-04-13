@@ -23,7 +23,33 @@ class PatchApplyResult:
     git_status_summary: str
 
 
+PATCH_FENCE_LINES = {
+    "```",
+    "```diff",
+    "```patch",
+    "```git",
+}
+PATCH_METADATA_PREFIXES = (
+    "index ",
+    "--- ",
+    "+++ ",
+    "new file mode",
+    "deleted file mode",
+    "old mode ",
+    "new mode ",
+    "similarity index ",
+    "dissimilarity index ",
+    "copy from ",
+    "copy to ",
+    "rename from ",
+    "rename to ",
+    "Binary files ",
+    "GIT binary patch",
+)
+
+
 def extract_patch_targets(patch_text: str) -> list[PatchTarget]:
+    patch_text = normalize_patch_text(patch_text)
     _validate_patch_shape(patch_text)
     targets: list[PatchTarget] = []
     current_target: PatchTarget | None = None
@@ -61,6 +87,7 @@ def apply_patch(
     *,
     allow_apply_on_dirty_files: bool,
 ) -> PatchApplyResult:
+    patch_text = normalize_patch_text(patch_text)
     targets = extract_patch_targets(patch_text)
     affected_paths = [validate_repo_relative_path(target.path) for target in targets]
     repo_relative_paths = [Path(*path.parts) for path in affected_paths]
@@ -97,7 +124,7 @@ def apply_patch(
     except Exception as exc:  # noqa: BLE001
         if isinstance(exc, PatchApplyError):
             raise
-        raise PatchApplyError(str(exc)) from exc
+        raise PatchApplyError(_patch_apply_failure_message(str(exc))) from exc
     finally:
         try:
             patch_path.unlink(missing_ok=True)
@@ -115,6 +142,40 @@ def validate_repo_relative_path(path: PurePosixPath) -> PurePosixPath:
     if path.parts and path.parts[0] == ".git":
         raise PatchApplyError("Patches may not touch .git internals")
     return path
+
+
+def normalize_patch_text(patch_text: str) -> str:
+    text = patch_text.replace("\r\n", "\n").replace("\r", "\n").lstrip("\ufeff")
+    normalized_lines: list[str] = []
+    in_hunk = False
+
+    for raw_line in text.split("\n"):
+        stripped = raw_line.strip()
+        if stripped in PATCH_FENCE_LINES:
+            continue
+
+        left_trimmed = raw_line.lstrip(" ")
+        if left_trimmed.startswith("diff --git "):
+            normalized_lines.append(left_trimmed)
+            in_hunk = False
+            continue
+        if left_trimmed == "@@" or left_trimmed.startswith("@@ "):
+            normalized_lines.append(left_trimmed)
+            in_hunk = True
+            continue
+        if in_hunk:
+            normalized_lines.append(_normalize_hunk_line(raw_line))
+            continue
+        if any(left_trimmed.startswith(prefix) for prefix in PATCH_METADATA_PREFIXES):
+            normalized_lines.append(left_trimmed)
+            continue
+        normalized_lines.append(raw_line)
+
+    while normalized_lines and not normalized_lines[0].strip():
+        normalized_lines.pop(0)
+    while normalized_lines and not normalized_lines[-1].strip():
+        normalized_lines.pop()
+    return "\n".join(normalized_lines)
 
 
 def _validate_patch_shape(patch_text: str) -> None:
@@ -172,3 +233,27 @@ def _verify_staged_paths(repo_root: Path, repo_relative_paths: list[Path]) -> No
             "Patch verification failed after apply. "
             f"Expected staged paths: {sorted(expected)}. Actual staged paths: {sorted(staged)}."
         )
+
+
+def _normalize_hunk_line(raw_line: str) -> str:
+    if raw_line.startswith((" ", "+", "-", "\\")):
+        return raw_line
+
+    left_trimmed = raw_line.lstrip(" ")
+    if left_trimmed.startswith(("+", "-", "\\")):
+        return left_trimmed
+    if not left_trimmed:
+        return " "
+    return f" {left_trimmed}"
+
+
+def _patch_apply_failure_message(message: str) -> str:
+    lowered = message.lower()
+    if "corrupt patch" in lowered:
+        return (
+            "Patch structurally invalid after normalization. "
+            "Ask the LLM to return only a Git unified diff, without Markdown fences, "
+            "and with a leading single space on unchanged lines inside each hunk. "
+            f"Git reported: {message}"
+        )
+    return message

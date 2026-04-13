@@ -14,7 +14,7 @@ from devloop.errors import DevloopError, PatchApplyError, SessionError
 from devloop.git_tools import discover_repo_root
 from devloop.parsers.sbt_compile import parse_sbt_compile_output
 from devloop.parsers.sbt_test import parse_sbt_test_output
-from devloop.patch_apply import apply_patch
+from devloop.patch_apply import apply_patch, normalize_patch_text
 from devloop.prompt_builder import PromptSection, build_bootstrap_prompt, build_context_prompt
 from devloop.protocol import ProtocolCommand, parse_protocol_response
 from devloop.retrieval import QueryResult, RepositoryRetriever
@@ -247,6 +247,57 @@ def _handle_apply_patch(
             allow_apply_on_dirty_files=config.allow_apply_on_dirty_files,
         )
     except PatchApplyError as exc:
+        normalized_patch = normalize_patch_text(patch_text)
+        prompt_result = build_context_prompt(
+            task_summary=command.task_summary_en,
+            current_goal="Repair the rejected patch or request the smallest missing context needed to fix it.",
+            source_label="Local patch validation failure",
+            human_language_name=config.human_language_name,
+            sections=[
+                PromptSection("Patch apply failure", str(exc), required=True),
+                PromptSection(
+                    "Repair rules",
+                    (
+                        "Return exactly one machine-readable command block.\n"
+                        "Prefer APPLY_PATCH if you can correct the patch now.\n"
+                        "Use COLLECT_CONTEXT only if the failure happened because the current repository context is insufficient.\n"
+                        "Use ASK_HUMAN only if a manual run or manual answer is required.\n"
+                        "Inside payload.patch, return only a Git unified diff.\n"
+                        "Do not use Markdown code fences inside payload.patch.\n"
+                        "Inside each hunk, every unchanged line must start with a single leading space."
+                    ),
+                    required=True,
+                ),
+                PromptSection(
+                    "Rejected normalized patch",
+                    normalized_patch,
+                    compact_body=_compact_body(normalized_patch, 120),
+                ),
+            ],
+            max_chars=config.max_prompt_chars,
+        )
+        set_clipboard_text(prompt_result.text)
+        session.last_generated_prompt = prompt_result.text
+        session.last_truncation_report = prompt_result.truncation_report
+        session.add_history_entry(f"PATCH_REPAIR: {exc}")
+        session_store.save(session)
+        print(_human_text(config.human_language, "Patch не применен автоматически.", "Patch was not applied automatically."))
+        print(
+            _human_text(
+                config.human_language,
+                "В буфер обмена помещен repair prompt для ChatGPT.",
+                "A repair prompt for ChatGPT was copied to the clipboard.",
+            )
+        )
+        _print_next_step(
+            config.human_language,
+            _human_text(
+                config.human_language,
+                "вставь repair prompt в ChatGPT и получи исправленный ответ с одной machine-readable командой.",
+                "paste the repair prompt into ChatGPT and get a corrected reply with exactly one machine-readable command.",
+            ),
+        )
+        return
         raise DevloopError(f"Patch не применен: {exc}") from exc
 
     summary = ", ".join(result.affected_files)
@@ -269,7 +320,7 @@ def _handle_compile_log(
 ) -> None:
     parsed = parse_sbt_compile_output(clipboard_text, config.max_error_groups)
     query_results = retriever.build_compile_query_results(parsed)
-    query_results.append(QueryResult("project_tree", "Project tree summary", retriever.project_tree_summary()))
+    _maybe_add_project_tree_summary(query_results, retriever, config)
     prompt_result = build_context_prompt(
         task_summary=session.last_known_task_summary or "Diagnose the current Scala compile failure.",
         current_goal=session.last_known_current_goal or "Analyze the compile diagnostics and propose the smallest safe next step.",
@@ -315,7 +366,7 @@ def _handle_test_log(
 ) -> None:
     parsed = parse_sbt_test_output(clipboard_text, config.max_test_failures)
     query_results = retriever.build_test_query_results(parsed)
-    query_results.append(QueryResult("project_tree", "Project tree summary", retriever.project_tree_summary()))
+    _maybe_add_project_tree_summary(query_results, retriever, config)
     prompt_result = build_context_prompt(
         task_summary=session.last_known_task_summary or "Diagnose the current Scala test failure.",
         current_goal=session.last_known_current_goal or "Analyze the failing tests and propose the smallest safe next step.",
@@ -359,10 +410,8 @@ def _handle_raw_clipboard(
     session_store: SessionStore,
     session: SessionState,
 ) -> None:
-    query_results = [
-        retriever.build_raw_clipboard_query_result(clipboard_text),
-        QueryResult("project_tree", "Project tree summary", retriever.project_tree_summary()),
-    ]
+    query_results = [retriever.build_raw_clipboard_query_result(clipboard_text)]
+    _maybe_add_project_tree_summary(query_results, retriever, config)
     prompt_result = build_context_prompt(
         task_summary=session.last_known_task_summary or "Analyze the clipboard content and propose the next safe step.",
         current_goal=session.last_known_current_goal or "Use the raw clipboard content to determine the next useful action in the devloop workflow.",
@@ -421,6 +470,16 @@ def _compact_body(body: str, max_lines: int) -> str:
     kept = lines[:max_lines]
     kept.append(f"... omitted {len(lines) - max_lines} more lines")
     return "\n".join(kept)
+
+
+def _maybe_add_project_tree_summary(
+    query_results: list[QueryResult],
+    retriever: RepositoryRetriever,
+    config: DevloopConfig,
+) -> None:
+    if not config.include_project_summary_in_prompts:
+        return
+    query_results.append(QueryResult("project_tree", "Project tree summary", retriever.project_tree_summary()))
 
 
 def _resolve_detection(text: str, force_mode: str) -> tuple[DetectionResult, bool]:
