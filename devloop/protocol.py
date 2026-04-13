@@ -78,15 +78,12 @@ class ProtocolEnvelope:
 
 
 def extract_command_block(response_text: str) -> str:
-    _validate_marker_counts(response_text)
-    start_index = response_text.index(COMMAND_START) + len(COMMAND_START)
-    end_index = response_text.index(COMMAND_END)
-    if end_index <= start_index:
-        raise ProtocolError("Command block markers are in the wrong order")
-    block = response_text[start_index:end_index].strip()
-    if not block:
-        raise ProtocolError("Command block is empty")
-    return block
+    blocks = _extract_command_blocks(response_text)
+    if len(blocks) == 1:
+        return blocks[0]
+    if all(block == blocks[0] for block in blocks[1:]):
+        return blocks[0]
+    raise ProtocolError("Expected exactly one command block")
 
 
 def parse_protocol_response(response_text: str) -> ProtocolEnvelope:
@@ -236,10 +233,9 @@ def _validate_apply_patch_payload(payload: dict[str, Any]) -> None:
 
 
 def _strip_command_block(response_text: str, raw_block: str) -> str:
-    _validate_marker_counts(response_text)
-    start_index = response_text.index(COMMAND_START)
-    end_index = response_text.index(COMMAND_END) + len(COMMAND_END)
-    return (response_text[:start_index] + response_text[end_index:]).strip()
+    _ = raw_block
+    cleaned = _COMMAND_BLOCK_RE.sub("", response_text)
+    return cleaned.strip()
 
 
 def _required_string(data: dict[str, Any], key: str) -> str:
@@ -375,6 +371,9 @@ def _parse_relaxed_apply_patch_payload(payload_text: str) -> dict[str, Any] | No
     parsed = _try_parse_relaxed_payload_mapping(payload_text)
     if parsed is not None:
         return parsed
+    parsed = _manual_parse_relaxed_search_replace_payload(payload_text)
+    if parsed is not None:
+        return parsed
     return None
 
 
@@ -502,3 +501,150 @@ def _next_non_empty_line(lines: list[str], start_index: int) -> tuple[int, str] 
         indent = len(line) - len(line.lstrip(" "))
         return indent, stripped
     return None
+
+
+_COMMAND_BLOCK_RE = re.compile(
+    re.escape(COMMAND_START) + r"(.*?)" + re.escape(COMMAND_END),
+    re.DOTALL,
+)
+
+
+def _extract_command_blocks(response_text: str) -> list[str]:
+    matches = [match.group(1).strip() for match in _COMMAND_BLOCK_RE.finditer(response_text)]
+    if not matches:
+        raise ProtocolError("Expected exactly one command block")
+    if any(not match for match in matches):
+        raise ProtocolError("Command block is empty")
+    return matches
+
+
+def _manual_parse_relaxed_search_replace_payload(payload_text: str) -> dict[str, Any] | None:
+    lines = payload_text.splitlines()
+    payload: dict[str, Any] = {}
+    files: list[dict[str, Any]] = []
+    current_file: dict[str, Any] | None = None
+    current_replacement: dict[str, Any] | None = None
+    index = 0
+
+    while index < len(lines):
+        stripped = lines[index].strip()
+        if not stripped:
+            index += 1
+            continue
+
+        if _starts_with_key(stripped, "patch_format"):
+            payload["patch_format"] = _parse_relaxed_scalar(stripped.split(":", 1)[1].strip())
+            index += 1
+            continue
+
+        if stripped == "files:":
+            index += 1
+            continue
+
+        if stripped.startswith("- path:"):
+            path_text = stripped.split(":", 1)[1].strip()
+            current_file = {"path": _parse_relaxed_scalar(path_text)}
+            files.append(current_file)
+            current_replacement = None
+            index += 1
+            continue
+
+        if current_file is None:
+            index += 1
+            continue
+
+        if _starts_with_key(stripped, "operation"):
+            current_file["operation"] = _parse_relaxed_scalar(stripped.split(":", 1)[1].strip())
+            index += 1
+            continue
+
+        if _starts_with_key(stripped, "expected_sha256"):
+            current_file["expected_sha256"] = str(_parse_relaxed_scalar(stripped.split(":", 1)[1].strip()))
+            index += 1
+            continue
+
+        if _starts_with_key(stripped, "replacements"):
+            current_file.setdefault("replacements", [])
+            current_replacement = None
+            index += 1
+            continue
+
+        if stripped.startswith("- search:"):
+            current_file.setdefault("replacements", [])
+            current_replacement = {}
+            current_file["replacements"].append(current_replacement)
+            value, index = _read_relaxed_search_replace_value(lines, index, "search")
+            current_replacement["search"] = value
+            continue
+
+        if _starts_with_key(stripped, "replace"):
+            if current_replacement is None:
+                index += 1
+                continue
+            value, index = _read_relaxed_search_replace_value(lines, index, "replace")
+            current_replacement["replace"] = value
+            continue
+
+        if _starts_with_key(stripped, "expected_matches"):
+            if current_replacement is None:
+                index += 1
+                continue
+            current_replacement["expected_matches"] = _parse_relaxed_scalar(stripped.split(":", 1)[1].strip())
+            index += 1
+            continue
+
+        if _starts_with_key(stripped, "content"):
+            value, index = _read_relaxed_search_replace_value(lines, index, "content")
+            current_file["content"] = value
+            continue
+
+        index += 1
+
+    if not files:
+        return None
+    payload["files"] = files
+    if payload.get("patch_format") != SUPPORTED_PATCH_FORMAT:
+        return None
+    return payload
+
+
+def _read_relaxed_search_replace_value(lines: list[str], start_index: int, key: str) -> tuple[str, int]:
+    stripped = lines[start_index].strip()
+    value_text = stripped.split(":", 1)[1].lstrip()
+    if value_text not in {"|", "|-", "|+"}:
+        return str(_parse_relaxed_scalar(value_text)), start_index + 1
+
+    block_lines: list[str] = []
+    index = start_index + 1
+    while index < len(lines):
+        candidate = lines[index]
+        candidate_stripped = candidate.strip()
+        if candidate_stripped and _is_relaxed_search_replace_boundary(candidate_stripped, key):
+            break
+        block_lines.append(candidate)
+        index += 1
+    return _dedent_relaxed_block(block_lines), index
+
+
+def _is_relaxed_search_replace_boundary(stripped: str, current_key: str) -> bool:
+    if current_key == "content":
+        return _starts_with_any_key(
+            stripped,
+            {"patch_format", "files", "operation", "expected_sha256", "replacements", "content"},
+        ) or stripped.startswith("- path:")
+    return _starts_with_any_key(
+        stripped,
+        {"patch_format", "files", "operation", "expected_sha256", "replacements", "replace", "expected_matches", "content"},
+    ) or stripped.startswith("- path:") or stripped.startswith("- search:")
+
+
+def _dedent_relaxed_block(lines: list[str]) -> str:
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    if not lines:
+        return ""
+    indents = [len(line) - len(line.lstrip(" ")) for line in lines if line.strip()]
+    common_indent = min(indents) if indents else 0
+    return "\n".join(line[common_indent:] if len(line) >= common_indent else "" for line in lines)

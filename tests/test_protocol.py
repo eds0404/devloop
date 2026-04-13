@@ -39,8 +39,8 @@ class ProtocolTests(unittest.TestCase):
 
     def test_rejects_multiple_blocks(self) -> None:
         invalid = SAMPLE_RESPONSE + "\n" + SAMPLE_RESPONSE
-        with self.assertRaises(ProtocolError):
-            extract_command_block(invalid)
+        block = extract_command_block(invalid)
+        self.assertIn('command: "COLLECT_CONTEXT"', block)
 
     def test_accepts_legacy_human_fields(self) -> None:
         legacy_response = SAMPLE_RESPONSE.replace("summary_human", "summary_ru").replace(
@@ -54,6 +54,12 @@ class ProtocolTests(unittest.TestCase):
     def test_extracts_command_block_markers(self) -> None:
         block = extract_command_block(SAMPLE_RESPONSE)
         self.assertIn('version: "1"', block)
+
+    def test_rejects_multiple_distinct_blocks(self) -> None:
+        other = SAMPLE_RESPONSE.replace("COLLECT_CONTEXT", "DONE", 1)
+        invalid = SAMPLE_RESPONSE + "\n" + other
+        with self.assertRaises(ProtocolError):
+            extract_command_block(invalid)
 
     def test_reports_indentation_hint_for_collect_context_payload_lists(self) -> None:
         malformed = """

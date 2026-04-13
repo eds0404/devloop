@@ -17,6 +17,7 @@ class PromptBuilderTests(unittest.TestCase):
         self.assertIn("<<<DEVLOOP_COMMAND_START>>>", result.text)
         self.assertIn("Every field nested under `payload:` must be indented by two spaces.", result.text)
         self.assertIn("read_around_match", result.text)
+        self.assertIn("Prefer no prose outside the command block.", result.text)
 
     def test_can_replace_full_protocol_reference_with_short_reminder(self) -> None:
         result = build_context_prompt(

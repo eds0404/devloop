@@ -7,6 +7,12 @@ Return exactly one machine-readable block between these exact markers:
 
 Copy the closest example below and change only the values.
 
+Response discipline:
+- Prefer no prose outside the command block.
+- Use `summary_human` and `next_step_human` for the human-facing explanation.
+- If you add prose outside the block, keep it to at most one short sentence before the block.
+- Never emit a second draft, a corrected second attempt, or repeated copies of the same block.
+
 Hard rules:
 - Do not use Markdown code fences inside the command block.
 - Use YAML only.
