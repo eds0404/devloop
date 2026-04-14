@@ -4,9 +4,123 @@ from devloop.errors import ProtocolError
 from devloop.protocol import extract_command_block, parse_protocol_response
 
 
-SAMPLE_RESPONSE = """
-I will first collect only the needed context.
+SAMPLE_RESPONSE_V2 = """
+<<<DEVLOOP_COMMAND_START>>>
+DEVLOOP_COMMAND_V2
+VERSION: 1
+COMMAND: COLLECT_CONTEXT
+SUMMARY_HUMAN: Collecting the minimum context.
+NEXT_STEP_HUMAN: Paste the new prompt into ChatGPT.
+TASK_SUMMARY_EN: Fix the compile issue.
+CURRENT_GOAL_EN: Inspect the parser implementation.
+PROMPT_GOAL: Diagnose the compile failure.
+*** BEGIN QUERY ***
+TYPE: read_snippet
+FILE: src/main/scala/com/acme/Parser.scala
+START_LINE: 10
+END_LINE: 30
+*** END QUERY ***
+<<<DEVLOOP_COMMAND_END>>>
+""".strip()
 
+
+class ProtocolTests(unittest.TestCase):
+    def test_extracts_single_command_block(self) -> None:
+        block = extract_command_block(SAMPLE_RESPONSE_V2)
+        self.assertIn("COMMAND: COLLECT_CONTEXT", block)
+
+    def test_accepts_duplicate_identical_blocks(self) -> None:
+        duplicated = SAMPLE_RESPONSE_V2 + "\n\n" + SAMPLE_RESPONSE_V2
+        block = extract_command_block(duplicated)
+        self.assertEqual(block, extract_command_block(SAMPLE_RESPONSE_V2))
+
+    def test_parses_v2_protocol_envelope(self) -> None:
+        envelope = parse_protocol_response(SAMPLE_RESPONSE_V2)
+        self.assertEqual(envelope.command.command, "COLLECT_CONTEXT")
+        self.assertEqual(envelope.command.task_summary_en, "Fix the compile issue.")
+        self.assertEqual(envelope.command.summary_human, "Collecting the minimum context.")
+        self.assertEqual(envelope.command.payload["queries"][0]["type"], "read_snippet")
+
+    def test_extracts_command_block_markers(self) -> None:
+        block = extract_command_block(SAMPLE_RESPONSE_V2)
+        self.assertIn("VERSION: 1", block)
+
+    def test_parses_v2_collect_context_envelope(self) -> None:
+        envelope = parse_protocol_response(SAMPLE_RESPONSE_V2)
+        self.assertEqual(envelope.command.command, "COLLECT_CONTEXT")
+        self.assertEqual(envelope.command.summary_human, "Collecting the minimum context.")
+        self.assertEqual(envelope.command.payload["queries"][0]["type"], "read_snippet")
+
+    def test_rejects_multiple_distinct_blocks(self) -> None:
+        other = SAMPLE_RESPONSE_V2.replace("COMMAND: COLLECT_CONTEXT", "COMMAND: DONE", 1)
+        invalid = SAMPLE_RESPONSE_V2 + "\n" + other
+        with self.assertRaises(ProtocolError):
+            extract_command_block(invalid)
+
+    def test_parses_v2_with_mixed_case_keys(self) -> None:
+        response = """
+<<<DEVLOOP_COMMAND_START>>>
+DEVLOOP_COMMAND_V2
+Version: 1
+Command: ASK_HUMAN
+Summary_Human: Ask the human to rerun compile.
+Next_Step_Human: Run the compile command and return the first error.
+Task_Summary_En: Validate parser robustness.
+Current_Goal_En: Accept mixed-case V2 keys.
+*** BEGIN REQUESTED_RUN ***
+Kind: sbt
+Purpose: Re-run compile
+Command_Example: sbt compile
+*** END REQUESTED_RUN ***
+<<<DEVLOOP_COMMAND_END>>>
+""".strip()
+        envelope = parse_protocol_response(response)
+        self.assertEqual(envelope.command.command, "ASK_HUMAN")
+        self.assertEqual(envelope.command.payload["requested_runs"][0]["kind"], "sbt")
+
+    def test_parses_done_command(self) -> None:
+        response = """
+<<<DEVLOOP_COMMAND_START>>>
+DEVLOOP_COMMAND_V2
+VERSION: 1
+COMMAND: DONE
+SUMMARY_HUMAN: Done.
+NEXT_STEP_HUMAN: Review the result.
+TASK_SUMMARY_EN: Finish the task.
+CURRENT_GOAL_EN: Stop the workflow.
+<<<DEVLOOP_COMMAND_END>>>
+""".strip()
+        envelope = parse_protocol_response(response)
+        self.assertEqual(envelope.command.command, "DONE")
+        self.assertEqual(envelope.command.payload, {})
+
+    def test_strips_human_text_outside_command_block(self) -> None:
+        response = "Short explanation for the human.\n\n" + SAMPLE_RESPONSE_V2
+        envelope = parse_protocol_response(response)
+        self.assertEqual(envelope.human_text, "Short explanation for the human.")
+
+    def test_rejects_unknown_collect_context_query_type(self) -> None:
+        response = """
+<<<DEVLOOP_COMMAND_START>>>
+DEVLOOP_COMMAND_V2
+VERSION: 1
+COMMAND: COLLECT_CONTEXT
+SUMMARY_HUMAN: Collecting context.
+NEXT_STEP_HUMAN: Paste the new prompt into ChatGPT.
+TASK_SUMMARY_EN: Validate parser safety.
+CURRENT_GOAL_EN: Reject unsupported query types.
+*** BEGIN QUERY ***
+TYPE: unsupported_query
+FILE: src/main/scala/com/acme/Parser.scala
+*** END QUERY ***
+<<<DEVLOOP_COMMAND_END>>>
+""".strip()
+        with self.assertRaises(ProtocolError) as context:
+            parse_protocol_response(response)
+        self.assertIn("Unsupported query type", str(context.exception))
+
+    def test_rejects_yaml_protocol_block(self) -> None:
+        response = """
 <<<DEVLOOP_COMMAND_START>>>
 version: "1"
 command: "COLLECT_CONTEXT"
@@ -23,220 +137,9 @@ payload:
       end_line: 30
 <<<DEVLOOP_COMMAND_END>>>
 """.strip()
-
-SAMPLE_RESPONSE_V2 = """
-<<<DEVLOOP_COMMAND_START>>>
-DEVLOOP_COMMAND_V2
-VERSION: 1
-COMMAND: COLLECT_CONTEXT
-SUMMARY_HUMAN: Собираю минимальный контекст.
-NEXT_STEP_HUMAN: Вставь новый prompt в ChatGPT.
-TASK_SUMMARY_EN: Fix the compile issue.
-CURRENT_GOAL_EN: Inspect the parser implementation.
-PROMPT_GOAL: Diagnose the compile failure.
-*** BEGIN QUERY ***
-TYPE: read_snippet
-FILE: src/main/scala/com/acme/Parser.scala
-START_LINE: 10
-END_LINE: 30
-*** END QUERY ***
-<<<DEVLOOP_COMMAND_END>>>
-""".strip()
-
-
-class ProtocolTests(unittest.TestCase):
-    def test_extracts_single_command_block(self) -> None:
-        block = extract_command_block(SAMPLE_RESPONSE)
-        self.assertIn('command: "COLLECT_CONTEXT"', block)
-
-    def test_parses_protocol_envelope(self) -> None:
-        envelope = parse_protocol_response(SAMPLE_RESPONSE)
-        self.assertEqual(envelope.command.command, "COLLECT_CONTEXT")
-        self.assertEqual(envelope.command.task_summary_en, "Fix the compile issue.")
-        self.assertEqual(envelope.command.summary_human, "Collecting the needed context.")
-        self.assertEqual(envelope.command.payload["queries"][0]["type"], "read_snippet")
-
-    def test_rejects_multiple_blocks(self) -> None:
-        invalid = SAMPLE_RESPONSE + "\n" + SAMPLE_RESPONSE
-        block = extract_command_block(invalid)
-        self.assertIn('command: "COLLECT_CONTEXT"', block)
-
-    def test_accepts_legacy_human_fields(self) -> None:
-        legacy_response = SAMPLE_RESPONSE.replace("summary_human", "summary_ru").replace(
-            "next_step_human",
-            "next_step_ru",
-        )
-        envelope = parse_protocol_response(legacy_response)
-        self.assertEqual(envelope.command.summary_human, "Collecting the needed context.")
-        self.assertEqual(envelope.command.next_step_human, "Paste the new prompt into ChatGPT.")
-
-    def test_extracts_command_block_markers(self) -> None:
-        block = extract_command_block(SAMPLE_RESPONSE)
-        self.assertIn('version: "1"', block)
-
-    def test_parses_v2_collect_context_envelope(self) -> None:
-        envelope = parse_protocol_response(SAMPLE_RESPONSE_V2)
-        self.assertEqual(envelope.command.command, "COLLECT_CONTEXT")
-        self.assertEqual(envelope.command.summary_human, "Собираю минимальный контекст.")
-        self.assertEqual(envelope.command.payload["queries"][0]["type"], "read_snippet")
-
-    def test_rejects_multiple_distinct_blocks(self) -> None:
-        other = SAMPLE_RESPONSE.replace("COLLECT_CONTEXT", "DONE", 1)
-        invalid = SAMPLE_RESPONSE + "\n" + other
-        with self.assertRaises(ProtocolError):
-            extract_command_block(invalid)
-
-    def test_reports_indentation_hint_for_collect_context_payload_lists(self) -> None:
-        malformed = """
-Brief explanation.
-
-<<<DEVLOOP_COMMAND_START>>>
-version: "1"
-command: "COLLECT_CONTEXT"
-summary_human: "Нужно собрать контекст."
-next_step_human: "Вставь новый prompt в ChatGPT."
-task_summary_en: "Continue after migration."
-current_goal_en: "Collect current source context."
-payload:
-queries:
-- type: "read_snippet"
-  file: "src/main/scala/com/acme/Parser.scala"
-  start_line: 10
-  end_line: 20
-<<<DEVLOOP_COMMAND_END>>>
-""".strip()
         with self.assertRaises(ProtocolError) as context:
-            parse_protocol_response(malformed)
-        self.assertIn("payload", str(context.exception))
-        self.assertIn("indented", str(context.exception))
-
-    def test_moves_unexpected_top_level_fields_into_payload(self) -> None:
-        malformed = """
-Brief explanation.
-
-<<<DEVLOOP_COMMAND_START>>>
-version: "1"
-command: "ASK_HUMAN"
-summary_human: "Need a rerun."
-next_step_human: "Run the tests."
-task_summary_en: "Continue after migration."
-current_goal_en: "Collect fresh IT failures."
-payload: {}
-requested_runs: []
-<<<DEVLOOP_COMMAND_END>>>
-""".strip()
-        envelope = parse_protocol_response(malformed)
-        self.assertEqual(envelope.command.command, "ASK_HUMAN")
-        self.assertEqual(envelope.command.payload["requested_runs"], [])
-
-    def test_relaxed_parser_accepts_misaligned_ask_human_payload(self) -> None:
-        malformed = """
-Сначала нужен свежий результат прогона.
-
-<<<DEVLOOP_COMMAND_START>>>
-version: 1
-command: ASK_HUMAN
-summary_human: "Сначала нужен свежий результат прогона."
-next_step_human: "Запусти узкий прогон."
-task_summary_en: "Continue after migration."
-current_goal_en: "Collect current IT failures."
-payload:
-requested_runs:
-- kind: sbt
-purpose: "Collect current failures"
-command_example: "sbt 'core/IntegrationTest/test'"
-<<<DEVLOOP_COMMAND_END>>>
-""".strip()
-        envelope = parse_protocol_response(malformed)
-        self.assertEqual(envelope.command.command, "ASK_HUMAN")
-        self.assertIn("requested_runs", envelope.command.payload["raw_payload_text"])
-
-    @unittest.skip("legacy unified diff support removed")
-    def test_relaxed_parser_accepts_apply_patch_payload(self) -> None:
-        malformed = """
-Patch ready.
-
-<<<DEVLOOP_COMMAND_START>>>
-version: 1
-command: APPLY_PATCH
-summary_human: "Применяю минимальный патч."
-next_step_human: "Запусти compile."
-task_summary_en: "Fix the remaining compile issue."
-current_goal_en: "Apply the smallest diff."
-payload:
-patch_format: git_unified_diff
-patch: |
-  diff --git a/src/main/scala/com/acme/Parser.scala b/src/main/scala/com/acme/Parser.scala
-  --- a/src/main/scala/com/acme/Parser.scala
-  +++ b/src/main/scala/com/acme/Parser.scala
-  @@
-  -old
-  +new
-<<<DEVLOOP_COMMAND_END>>>
-""".strip()
-        envelope = parse_protocol_response(malformed)
-        self.assertEqual(envelope.command.command, "APPLY_PATCH")
-        self.assertEqual(envelope.command.payload["patch_format"], "git_unified_diff")
-        self.assertIn("diff --git", envelope.command.payload["patch"])
-
-    @unittest.skip("legacy unified diff support removed")
-    def test_relaxed_parser_accepts_realistic_malformed_apply_patch_block(self) -> None:
-        malformed = """
-Patch ready.
-
-<<<DEVLOOP_COMMAND_START>>>
-version: "1"
-command: "APPLY_PATCH"
-summary_human: "Apply the patch."
-next_step_human: "Run compile."
-task_summary_en: "Fix the remaining integration-test compile issue."
-current_goal_en: "Remove the leftover Play JSON usage."
-payload:
-patch_format: "git_unified_diff"
-patch: |
-diff --git a/external-api/src/it/scala/com/acme/DayEndCommandsSpec.scala b/external-api/src/it/scala/com/acme/DayEndCommandsSpec.scala
---- a/external-api/src/it/scala/com/acme/DayEndCommandsSpec.scala
-+++ b/external-api/src/it/scala/com/acme/DayEndCommandsSpec.scala
-@@ -1,4 +1,4 @@
-import com.acme.LegacyJson
-+import io.circe.syntax._
--import play.api.libs.json.Json
-```
- import java.time.Instant
-<<<DEVLOOP_COMMAND_END>>>
-""".strip()
-        envelope = parse_protocol_response(malformed)
-        self.assertEqual(envelope.command.command, "APPLY_PATCH")
-        self.assertEqual(envelope.command.payload["patch_format"], "git_unified_diff")
-        self.assertIn("DayEndCommandsSpec.scala", envelope.command.payload["patch"])
-        self.assertIn("```", envelope.command.payload["patch"])
-
-    def test_parses_search_replace_apply_patch_payload(self) -> None:
-        response = """
-Patch ready.
-
-<<<DEVLOOP_COMMAND_START>>>
-version: "1"
-command: "APPLY_PATCH"
-summary_human: "Apply the safer structured patch."
-next_step_human: "Run compile."
-task_summary_en: "Replace the leftover Play JSON usage."
-current_goal_en: "Apply exact source replacements."
-payload:
-  patch_format: "search_replace_v1"
-  files:
-    - path: "src/main/scala/com/acme/Parser.scala"
-      replacements:
-        - search: |
-            import play.api.libs.json.Json
-          replace: |
-            import io.circe.syntax._
-          expected_matches: 1
-<<<DEVLOOP_COMMAND_END>>>
-""".strip()
-        envelope = parse_protocol_response(response)
-        self.assertEqual(envelope.command.payload["patch_format"], "search_replace_v1")
-        self.assertEqual(envelope.command.payload["files"][0]["path"], "src/main/scala/com/acme/Parser.scala")
+            parse_protocol_response(response)
+        self.assertIn("DEVLOOP_COMMAND_V2", str(context.exception))
 
 
 if __name__ == "__main__":

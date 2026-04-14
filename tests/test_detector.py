@@ -21,13 +21,13 @@ TEST_SAMPLE = """
 LLM_SAMPLE = """
 Short explanation.
 <<<DEVLOOP_COMMAND_START>>>
-version: "1"
-command: "DONE"
-summary_human: "Done."
-next_step_human: "Check the changes."
-task_summary_en: "Finish the task."
-current_goal_en: "Stop."
-payload: {}
+DEVLOOP_COMMAND_V2
+VERSION: 1
+COMMAND: DONE
+SUMMARY_HUMAN: Done.
+NEXT_STEP_HUMAN: Check the changes.
+TASK_SUMMARY_EN: Finish the task.
+CURRENT_GOAL_EN: Stop.
 <<<DEVLOOP_COMMAND_END>>>
 """.strip()
 

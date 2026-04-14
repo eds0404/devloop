@@ -134,26 +134,23 @@ Stores session state and exits cleanly.
 ChatGPT must return exactly one machine-readable block:
 
 ```text
-A short explanation for the human in the configured human language.
-
 <<<DEVLOOP_COMMAND_START>>>
-version: "1"
-command: "COLLECT_CONTEXT"
-summary_human: "I am collecting only the necessary context."
-next_step_human: "Paste the new prompt into ChatGPT."
-task_summary_en: "Fix the failing Scala compile issue."
-current_goal_en: "Inspect the parser implementation around the reported compile error."
-payload:
-  prompt_goal: "Diagnose the compile failure and propose a minimal patch."
-  queries:
-    - type: "read_snippet"
-      file: "src/main/scala/com/acme/Parser.scala"
-      start_line: 80
-      end_line: 160
+DEVLOOP_COMMAND_V2
+VERSION: 1
+COMMAND: COLLECT_CONTEXT
+SUMMARY_HUMAN: I am collecting only the necessary context.
+NEXT_STEP_HUMAN: Paste the new prompt into ChatGPT.
+TASK_SUMMARY_EN: Fix the failing Scala compile issue.
+CURRENT_GOAL_EN: Inspect the parser implementation around the reported compile error.
+PROMPT_GOAL: Diagnose the compile failure and propose a minimal patch.
+*** BEGIN QUERY ***
+TYPE: read_snippet
+FILE: src/main/scala/com/acme/Parser.scala
+START_LINE: 80
+END_LINE: 160
+*** END QUERY ***
 <<<DEVLOOP_COMMAND_END>>>
 ```
-
-For backward compatibility, the parser still accepts legacy `summary_ru` and `next_step_ru`. New prompts should use `summary_human` and `next_step_human`.
 
 ## Safety Restrictions
 

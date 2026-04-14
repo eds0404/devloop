@@ -8,7 +8,6 @@ import re
 from typing import Any, Iterable
 
 from devloop.errors import ProtocolError
-from devloop import yaml_compat as yaml
 
 COMMAND_START = "<<<DEVLOOP_COMMAND_START>>>"
 COMMAND_END = "<<<DEVLOOP_COMMAND_END>>>"
@@ -22,8 +21,6 @@ ALLOWED_TOP_LEVEL_FIELDS = {
     "task_summary_en",
     "current_goal_en",
     "payload",
-    "summary_ru",
-    "next_step_ru",
 }
 SUPPORTED_QUERY_TYPES = {
     "project_tree",
@@ -75,15 +72,6 @@ class ProtocolCommand:
             "payload_keys": sorted(self.payload.keys()),
         }
 
-    @property
-    def summary_ru(self) -> str:
-        return self.summary_human
-
-    @property
-    def next_step_ru(self) -> str:
-        return self.next_step_human
-
-
 @dataclass(slots=True)
 class ProtocolEnvelope:
     human_text: str
@@ -102,41 +90,17 @@ def extract_command_block(response_text: str) -> str:
 
 def parse_protocol_response(response_text: str) -> ProtocolEnvelope:
     raw_block = extract_command_block(response_text)
-    if _looks_like_v2_protocol_block(raw_block):
-        parsed = _parse_v2_protocol_block(raw_block)
-        command = ProtocolCommand(
-            version=_required_string_like(parsed, "version"),
-            command=_required_string(parsed, "command"),
-            summary_human=_required_string_with_alias(parsed, "summary_human", "summary_ru"),
-            next_step_human=_required_string_with_alias(parsed, "next_step_human", "next_step_ru"),
-            task_summary_en=_required_string(parsed, "task_summary_en"),
-            current_goal_en=_required_string(parsed, "current_goal_en"),
-            payload=_required_dict(parsed, "payload"),
+    if not _looks_like_v2_protocol_block(raw_block):
+        raise ProtocolError(
+            "Only DEVLOOP_COMMAND_V2 line-based protocol is supported. "
+            "YAML command blocks are no longer accepted."
         )
-        _validate_command(command)
-        human_text = _strip_command_block(response_text, raw_block)
-        return ProtocolEnvelope(human_text=human_text, raw_block=raw_block, command=command)
-    try:
-        parsed = yaml.safe_load(raw_block)
-    except yaml.YAMLError as exc:
-        fallback_parsed = _try_parse_relaxed_protocol_block(raw_block)
-        if fallback_parsed is not None:
-            parsed = fallback_parsed
-        else:
-            hint = _build_yaml_parse_hint(raw_block)
-            if hint:
-                raise ProtocolError(f"Failed to parse command block YAML: {exc}. Hint: {hint}") from exc
-            raise ProtocolError(f"Failed to parse command block YAML: {exc}") from exc
-    if not isinstance(parsed, dict):
-        raise ProtocolError("Command block must be a mapping")
-    parsed = _normalize_top_level_payload_fields(parsed)
-    _validate_top_level_fields(parsed)
-
+    parsed = _parse_v2_protocol_block(raw_block)
     command = ProtocolCommand(
         version=_required_string_like(parsed, "version"),
         command=_required_string(parsed, "command"),
-        summary_human=_required_string_with_alias(parsed, "summary_human", "summary_ru"),
-        next_step_human=_required_string_with_alias(parsed, "next_step_human", "next_step_ru"),
+        summary_human=_required_string(parsed, "summary_human"),
+        next_step_human=_required_string(parsed, "next_step_human"),
         task_summary_en=_required_string(parsed, "task_summary_en"),
         current_goal_en=_required_string(parsed, "current_goal_en"),
         payload=_required_dict(parsed, "payload"),
@@ -155,32 +119,6 @@ def _validate_command(command: ProtocolCommand) -> None:
         _validate_apply_patch_payload(command.payload)
     elif command.command in {"ASK_HUMAN", "DONE"} and not isinstance(command.payload, dict):
         raise ProtocolError("payload must be a mapping")
-
-
-def _validate_top_level_fields(parsed: dict[str, Any]) -> None:
-    unexpected = sorted(key for key in parsed.keys() if key not in ALLOWED_TOP_LEVEL_FIELDS)
-    if not unexpected:
-        return
-    extras = ", ".join(unexpected)
-    raise ProtocolError(
-        "Unexpected top-level fields: "
-        f"{extras}. This usually means nested payload fields were not indented under `payload:`."
-    )
-
-
-def _normalize_top_level_payload_fields(parsed: dict[str, Any]) -> dict[str, Any]:
-    payload = parsed.get("payload")
-    if not isinstance(payload, dict):
-        return parsed
-    unexpected = [key for key in list(parsed.keys()) if key not in ALLOWED_TOP_LEVEL_FIELDS]
-    if not unexpected:
-        return parsed
-    normalized = dict(parsed)
-    normalized_payload = dict(payload)
-    for key in unexpected:
-        normalized_payload[key] = normalized.pop(key)
-    normalized["payload"] = normalized_payload
-    return normalized
 
 
 def _validate_collect_context_payload(payload: dict[str, Any]) -> None:
@@ -287,216 +225,9 @@ def _required_dict(data: dict[str, Any], key: str) -> dict[str, Any]:
     return value
 
 
-def _required_string_with_alias(data: dict[str, Any], key: str, alias: str) -> str:
-    value = data.get(key)
-    if value is None:
-        value = data.get(alias)
-    if not isinstance(value, str) or not value.strip():
-        raise ProtocolError(f"Field {key} must be a non-empty string")
-    return value.strip()
-
-
 def _validate_marker_counts(response_text: str) -> None:
     if response_text.count(COMMAND_START) != 1 or response_text.count(COMMAND_END) != 1:
         raise ProtocolError("Expected exactly one command block")
-
-
-def _build_yaml_parse_hint(raw_block: str) -> str:
-    if "\t" in raw_block:
-        return "Use spaces only, not tabs, inside the command block."
-
-    lines = raw_block.splitlines()
-    for index, line in enumerate(lines):
-        stripped = line.strip()
-        if not stripped:
-            continue
-        indent = len(line) - len(line.lstrip(" "))
-        if stripped == "payload:":
-            next_line = _next_non_empty_line(lines, index + 1)
-            if next_line is not None:
-                next_indent, next_text = next_line
-                if next_indent <= indent:
-                    return (
-                        "All fields inside `payload:` must be indented by two spaces. "
-                        "Example: `payload:` then `  requested_runs:`."
-                    )
-                if next_text.startswith("- "):
-                    return (
-                        "Do not start a list directly under `payload:` without a field name. "
-                        "Use `payload:` then an indented key such as `  requested_runs:`."
-                    )
-        if stripped.endswith(":"):
-            key = stripped[:-1].strip()
-            next_line = _next_non_empty_line(lines, index + 1)
-            if next_line is None:
-                continue
-            next_indent, next_text = next_line
-            if next_text.startswith("- ") and next_indent <= indent:
-                return (
-                    f"List items under `{key}:` must be indented by two spaces. "
-                    f"Example: `{key}:` then `  - item`."
-                )
-    return ""
-
-
-def _try_parse_relaxed_protocol_block(raw_block: str) -> dict[str, Any] | None:
-    parsed = _extract_relaxed_top_level_fields(raw_block)
-    if parsed is None:
-        return None
-    command = parsed.get("command")
-    if command in {"ASK_HUMAN", "DONE"}:
-        payload_text = parsed.pop("_payload_text", "").strip()
-        parsed["payload"] = {"raw_payload_text": payload_text} if payload_text else {}
-        return parsed
-    if command == "APPLY_PATCH":
-        payload_text = parsed.pop("_payload_text", "")
-        payload = _parse_relaxed_apply_patch_payload(payload_text)
-        if payload is None:
-            return None
-        parsed["payload"] = payload
-        return parsed
-    return None
-
-
-def _extract_relaxed_top_level_fields(raw_block: str) -> dict[str, Any] | None:
-    lines = raw_block.splitlines()
-    parsed: dict[str, Any] = {}
-    payload_lines: list[str] = []
-    in_payload = False
-
-    for raw_line in lines:
-        stripped = raw_line.strip()
-        if not in_payload:
-            if not stripped:
-                continue
-            if stripped == "payload:":
-                in_payload = True
-                continue
-            match = re.match(r"^([A-Za-z0-9_]+):\s*(.*)$", stripped)
-            if not match:
-                return None
-            key = match.group(1)
-            value_text = match.group(2)
-            parsed[key] = _parse_relaxed_scalar(value_text)
-            continue
-        payload_lines.append(raw_line)
-
-    if "payload" in parsed:
-        return None
-    if "command" not in parsed:
-        return None
-    parsed["_payload_text"] = "\n".join(payload_lines).rstrip()
-    return parsed
-
-
-def _parse_relaxed_apply_patch_payload(payload_text: str) -> dict[str, Any] | None:
-    normalized_payload = _normalize_relaxed_search_replace_payload(payload_text)
-    if normalized_payload:
-        parsed = _try_parse_relaxed_payload_mapping(normalized_payload)
-        if parsed is not None:
-            return parsed
-
-    parsed = _try_parse_relaxed_payload_mapping(payload_text)
-    if parsed is not None:
-        return parsed
-    parsed = _manual_parse_relaxed_search_replace_payload(payload_text)
-    if parsed is not None:
-        return parsed
-    return None
-
-
-def _try_parse_relaxed_payload_mapping(payload_text: str) -> dict[str, Any] | None:
-    if not payload_text.strip():
-        return None
-    try:
-        parsed = yaml.safe_load(payload_text)
-    except yaml.YAMLError:
-        return None
-    return parsed if isinstance(parsed, dict) else None
-
-
-def _normalize_relaxed_search_replace_payload(payload_text: str) -> str:
-    normalized_lines: list[str] = []
-    block_indent: int | None = None
-    state = "top"
-
-    for raw_line in payload_text.splitlines():
-        stripped = raw_line.strip()
-        if block_indent is not None:
-            if stripped and _is_search_replace_control_line(stripped):
-                block_indent = None
-            else:
-                if not stripped:
-                    normalized_lines.append("")
-                else:
-                    current_indent = len(raw_line) - len(raw_line.lstrip(" "))
-                    if current_indent < block_indent:
-                        normalized_lines.append((" " * (block_indent - current_indent)) + raw_line)
-                    else:
-                        normalized_lines.append(raw_line)
-                continue
-
-        if not stripped:
-            normalized_lines.append("")
-            continue
-        if stripped.startswith("patch_format:"):
-            normalized_lines.append(f"patch_format: {stripped.split(':', 1)[1].strip()}")
-            state = "top"
-            continue
-        if stripped == "files:":
-            normalized_lines.append("files:")
-            state = "files"
-            continue
-        if stripped.startswith("- path:"):
-            normalized_lines.append(f"  {stripped}")
-            state = "file"
-            continue
-        if state == "file" and _starts_with_key(stripped, "replacements"):
-            normalized_lines.append("    replacements:")
-            state = "replacements"
-            continue
-        if state == "file" and _starts_with_any_key(stripped, {"operation", "expected_sha256", "content"}):
-            normalized_lines.append(f"    {stripped}")
-            if _is_block_scalar_field(stripped):
-                block_indent = 6
-            continue
-        if state in {"file", "replacements"} and stripped.startswith("- search:"):
-            normalized_lines.append(f"      {stripped}")
-            state = "replacement"
-            if _is_block_scalar_field(stripped):
-                block_indent = 10
-            continue
-        if state == "replacement" and _starts_with_any_key(stripped, {"replace", "expected_matches"}):
-            normalized_lines.append(f"        {stripped}")
-            if _is_block_scalar_field(stripped):
-                block_indent = 10
-            continue
-        normalized_lines.append(raw_line)
-
-    return "\n".join(normalized_lines).strip()
-
-
-def _is_search_replace_control_line(stripped: str) -> bool:
-    if stripped == "files:":
-        return True
-    if stripped.startswith("- path:") or stripped.startswith("- search:"):
-        return True
-    return _starts_with_any_key(
-        stripped,
-        {"patch_format", "operation", "expected_sha256", "content", "replacements", "replace", "expected_matches"},
-    )
-
-
-def _starts_with_any_key(stripped: str, keys: Iterable[str]) -> bool:
-    return any(_starts_with_key(stripped, key) for key in keys)
-
-
-def _starts_with_key(stripped: str, key: str) -> bool:
-    return stripped == f"{key}:" or stripped.startswith(f"{key}: ")
-
-
-def _is_block_scalar_field(stripped: str) -> bool:
-    return stripped.endswith("|") or stripped.endswith("|-") or stripped.endswith("|+")
 
 
 def _parse_relaxed_scalar(value_text: str) -> Any:
@@ -520,17 +251,6 @@ def _parse_relaxed_scalar(value_text: str) -> Any:
             return stripped[1:-1]
     return stripped
 
-
-def _next_non_empty_line(lines: list[str], start_index: int) -> tuple[int, str] | None:
-    for line in lines[start_index:]:
-        stripped = line.strip()
-        if not stripped:
-            continue
-        indent = len(line) - len(line.lstrip(" "))
-        return indent, stripped
-    return None
-
-
 _COMMAND_BLOCK_RE = re.compile(
     re.escape(COMMAND_START) + r"(.*?)" + re.escape(COMMAND_END),
     re.DOTALL,
@@ -544,127 +264,6 @@ def _extract_command_blocks(response_text: str) -> list[str]:
     if any(not match for match in matches):
         raise ProtocolError("Command block is empty")
     return matches
-
-
-def _manual_parse_relaxed_search_replace_payload(payload_text: str) -> dict[str, Any] | None:
-    lines = payload_text.splitlines()
-    payload: dict[str, Any] = {}
-    files: list[dict[str, Any]] = []
-    current_file: dict[str, Any] | None = None
-    current_replacement: dict[str, Any] | None = None
-    index = 0
-
-    while index < len(lines):
-        stripped = lines[index].strip()
-        if not stripped:
-            index += 1
-            continue
-
-        if _starts_with_key(stripped, "patch_format"):
-            payload["patch_format"] = _parse_relaxed_scalar(stripped.split(":", 1)[1].strip())
-            index += 1
-            continue
-
-        if stripped == "files:":
-            index += 1
-            continue
-
-        if stripped.startswith("- path:"):
-            path_text = stripped.split(":", 1)[1].strip()
-            current_file = {"path": _parse_relaxed_scalar(path_text)}
-            files.append(current_file)
-            current_replacement = None
-            index += 1
-            continue
-
-        if current_file is None:
-            index += 1
-            continue
-
-        if _starts_with_key(stripped, "operation"):
-            current_file["operation"] = _parse_relaxed_scalar(stripped.split(":", 1)[1].strip())
-            index += 1
-            continue
-
-        if _starts_with_key(stripped, "expected_sha256"):
-            current_file["expected_sha256"] = str(_parse_relaxed_scalar(stripped.split(":", 1)[1].strip()))
-            index += 1
-            continue
-
-        if _starts_with_key(stripped, "replacements"):
-            current_file.setdefault("replacements", [])
-            current_replacement = None
-            index += 1
-            continue
-
-        if stripped.startswith("- search:"):
-            current_file.setdefault("replacements", [])
-            current_replacement = {}
-            current_file["replacements"].append(current_replacement)
-            value, index = _read_relaxed_search_replace_value(lines, index, "search")
-            current_replacement["search"] = value
-            continue
-
-        if _starts_with_key(stripped, "replace"):
-            if current_replacement is None:
-                index += 1
-                continue
-            value, index = _read_relaxed_search_replace_value(lines, index, "replace")
-            current_replacement["replace"] = value
-            continue
-
-        if _starts_with_key(stripped, "expected_matches"):
-            if current_replacement is None:
-                index += 1
-                continue
-            current_replacement["expected_matches"] = _parse_relaxed_scalar(stripped.split(":", 1)[1].strip())
-            index += 1
-            continue
-
-        if _starts_with_key(stripped, "content"):
-            value, index = _read_relaxed_search_replace_value(lines, index, "content")
-            current_file["content"] = value
-            continue
-
-        index += 1
-
-    if not files:
-        return None
-    payload["files"] = files
-    if payload.get("patch_format") != SUPPORTED_PATCH_FORMAT:
-        return None
-    return payload
-
-
-def _read_relaxed_search_replace_value(lines: list[str], start_index: int, key: str) -> tuple[str, int]:
-    stripped = lines[start_index].strip()
-    value_text = stripped.split(":", 1)[1].lstrip()
-    if value_text not in {"|", "|-", "|+"}:
-        return str(_parse_relaxed_scalar(value_text)), start_index + 1
-
-    block_lines: list[str] = []
-    index = start_index + 1
-    while index < len(lines):
-        candidate = lines[index]
-        candidate_stripped = candidate.strip()
-        if candidate_stripped and _is_relaxed_search_replace_boundary(candidate_stripped, key):
-            break
-        block_lines.append(candidate)
-        index += 1
-    return _dedent_relaxed_block(block_lines), index
-
-
-def _is_relaxed_search_replace_boundary(stripped: str, current_key: str) -> bool:
-    if current_key == "content":
-        return _starts_with_any_key(
-            stripped,
-            {"patch_format", "files", "operation", "expected_sha256", "replacements", "content"},
-        ) or stripped.startswith("- path:")
-    return _starts_with_any_key(
-        stripped,
-        {"patch_format", "files", "operation", "expected_sha256", "replacements", "replace", "expected_matches", "content"},
-    ) or stripped.startswith("- path:") or stripped.startswith("- search:")
-
 
 def _dedent_relaxed_block(lines: list[str]) -> str:
     while lines and not lines[0].strip():
@@ -682,15 +281,22 @@ def _looks_like_v2_protocol_block(raw_block: str) -> bool:
     lines = [line.strip() for line in raw_block.splitlines() if line.strip()]
     if not lines:
         return False
-    if lines[0] == COMMAND_V2_HEADER:
+    if _normalize_v2_token(lines[0]) == COMMAND_V2_HEADER:
         return True
-    return any(line.startswith("COMMAND:") for line in lines[:8])
+    normalized_lines = [_normalize_v2_token(line) for line in lines[:16]]
+    has_command = any(line.startswith("COMMAND:") for line in normalized_lines)
+    has_payload = any(line == "PAYLOAD:" for line in normalized_lines)
+    has_v2_markers = any(
+        line in {FILE_BEGIN, QUERY_BEGIN, RUN_BEGIN, ARTIFACT_BEGIN, SEARCH_BEGIN, REPLACE_BEGIN, CONTENT_BEGIN}
+        for line in normalized_lines
+    )
+    return has_command and has_v2_markers and not has_payload
 
 
 def _parse_v2_protocol_block(raw_block: str) -> dict[str, Any]:
     lines = raw_block.splitlines()
     index = _skip_blank_lines(lines, 0)
-    if index < len(lines) and lines[index].strip() == COMMAND_V2_HEADER:
+    if index < len(lines) and _normalize_v2_token(lines[index].strip()) == COMMAND_V2_HEADER:
         index += 1
 
     top_fields: dict[str, Any] = {}
@@ -748,11 +354,12 @@ def _parse_v2_ask_human_payload(lines: list[str], index: int) -> dict[str, Any]:
         if index >= len(lines):
             break
         stripped = lines[index].strip()
-        if stripped == RUN_BEGIN:
+        normalized = _normalize_v2_token(stripped)
+        if normalized == RUN_BEGIN:
             section_lines, index = _collect_v2_section(lines, index + 1, RUN_END)
             runs.append(_parse_v2_mapping_section(section_lines))
             continue
-        if stripped == ARTIFACT_BEGIN:
+        if normalized == ARTIFACT_BEGIN:
             section_lines, index = _collect_v2_section(lines, index + 1, ARTIFACT_END)
             artifacts.append(_parse_v2_text_section(section_lines))
             continue
@@ -781,7 +388,7 @@ def _parse_v2_collect_context_payload(
         if index >= len(lines):
             break
         stripped = lines[index].strip()
-        if stripped != QUERY_BEGIN:
+        if _normalize_v2_token(stripped) != QUERY_BEGIN:
             raise ProtocolError(f"Unexpected DEVLOOP_COMMAND_V2 COLLECT_CONTEXT payload line: {stripped}")
         section_lines, index = _collect_v2_section(lines, index + 1, QUERY_END)
         queries.append(_parse_v2_mapping_section(section_lines))
@@ -794,7 +401,7 @@ def _parse_v2_apply_patch_payload(
     lines: list[str],
     index: int,
 ) -> dict[str, Any]:
-    patch_format = str(top_fields.get("patch_format", "")).strip()
+    patch_format = _normalize_v2_token(str(top_fields.get("patch_format", "")).strip())
     if patch_format and patch_format != SUPPORTED_PATCH_FORMAT_V2:
         raise ProtocolError(
             f"Unsupported DEVLOOP_COMMAND_V2 PATCH_FORMAT: {patch_format}. "
@@ -807,7 +414,7 @@ def _parse_v2_apply_patch_payload(
         if index >= len(lines):
             break
         stripped = lines[index].strip()
-        if stripped != FILE_BEGIN:
+        if _normalize_v2_token(stripped) != FILE_BEGIN:
             raise ProtocolError(f"Unexpected DEVLOOP_COMMAND_V2 APPLY_PATCH payload line: {stripped}")
         file_entry, index = _parse_v2_file_section(lines, index + 1)
         files.append(file_entry)
@@ -830,10 +437,11 @@ def _parse_v2_file_section(lines: list[str], index: int) -> tuple[dict[str, Any]
         if index >= len(lines):
             raise ProtocolError(f"Missing {FILE_END} in DEVLOOP_COMMAND_V2 APPLY_PATCH payload")
         stripped = lines[index].strip()
-        if stripped == FILE_END:
+        normalized = _normalize_v2_token(stripped)
+        if normalized == FILE_END:
             index += 1
             break
-        if stripped == SEARCH_BEGIN:
+        if normalized == SEARCH_BEGIN:
             search_text, index = _collect_v2_block(lines, index + 1, REPLACE_BEGIN)
             replace_text, index = _collect_v2_block(lines, index, BLOCK_END)
             replacements.append(
@@ -845,7 +453,7 @@ def _parse_v2_file_section(lines: list[str], index: int) -> tuple[dict[str, Any]
             )
             pending_match_count = 1
             continue
-        if stripped == CONTENT_BEGIN:
+        if normalized == CONTENT_BEGIN:
             content, index = _collect_v2_block(lines, index + 1, BLOCK_END)
             continue
 
@@ -854,7 +462,7 @@ def _parse_v2_file_section(lines: list[str], index: int) -> tuple[dict[str, Any]
             path = str(_parse_relaxed_scalar(value))
         elif key in {"OP", "OPERATION"}:
             operation = _normalize_v2_file_operation(value)
-        elif key == "EXPECTED_SHA256":
+        elif key in {"EXPECTED_SHA256", "HASH"}:
             expected_sha256 = str(_parse_relaxed_scalar(value)).removeprefix("sha256:").strip()
         elif key in {"MATCH_COUNT", "EXPECTED_MATCHES"}:
             pending_match_count = int(_parse_relaxed_scalar(value))
@@ -892,16 +500,17 @@ def _parse_v2_mapping_section(lines: list[str]) -> dict[str, Any]:
 
 def _parse_v2_text_section(lines: list[str]) -> str:
     text = "\n".join(line.rstrip() for line in lines).strip()
-    if text.startswith("TEXT:"):
+    if _normalize_v2_token(text).startswith("TEXT:"):
         return text.split(":", 1)[1].strip()
     return text
 
 
 def _collect_v2_section(lines: list[str], index: int, end_marker: str) -> tuple[list[str], int]:
     collected: list[str] = []
+    normalized_end_marker = _normalize_v2_token(end_marker)
     while index < len(lines):
         stripped = lines[index].strip()
-        if stripped == end_marker:
+        if _normalize_v2_token(stripped) == normalized_end_marker:
             return collected, index + 1
         collected.append(lines[index])
         index += 1
@@ -910,9 +519,10 @@ def _collect_v2_section(lines: list[str], index: int, end_marker: str) -> tuple[
 
 def _collect_v2_block(lines: list[str], index: int, end_marker: str) -> tuple[str, int]:
     collected: list[str] = []
+    normalized_end_marker = _normalize_v2_token(end_marker)
     while index < len(lines):
         stripped = lines[index].strip()
-        if stripped == end_marker:
+        if _normalize_v2_token(stripped) == normalized_end_marker:
             return _dedent_relaxed_block(collected), index + 1
         collected.append(lines[index])
         index += 1
@@ -966,10 +576,10 @@ def _normalize_v2_nested_key(key: str) -> str:
 
 
 def _parse_v2_key_value_line(stripped: str) -> tuple[str, str]:
-    match = re.match(r"^([A-Z_]+):\s*(.*)$", stripped)
+    match = re.match(r"^([A-Za-z0-9_]+):\s*(.*)$", stripped)
     if not match:
         raise ProtocolError(f"Expected DEVLOOP_COMMAND_V2 key/value line, got: {stripped}")
-    return match.group(1), match.group(2)
+    return match.group(1).upper(), match.group(2)
 
 
 def _skip_blank_lines(lines: list[str], index: int) -> int:
@@ -985,4 +595,8 @@ def _ensure_only_blank_tail(lines: list[str], index: int) -> None:
 
 
 def _is_v2_section_marker(stripped: str) -> bool:
-    return stripped in {FILE_BEGIN, QUERY_BEGIN, RUN_BEGIN, ARTIFACT_BEGIN}
+    return _normalize_v2_token(stripped) in {FILE_BEGIN, QUERY_BEGIN, RUN_BEGIN, ARTIFACT_BEGIN}
+
+
+def _normalize_v2_token(value: str) -> str:
+    return value.strip().upper()
