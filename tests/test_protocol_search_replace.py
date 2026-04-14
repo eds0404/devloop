@@ -5,6 +5,34 @@ from devloop.protocol import parse_protocol_response
 
 
 class ProtocolSearchReplaceTests(unittest.TestCase):
+    def test_parses_v2_search_replace_apply_patch_payload(self) -> None:
+        response = """
+<<<DEVLOOP_COMMAND_START>>>
+DEVLOOP_COMMAND_V2
+VERSION: 1
+COMMAND: APPLY_PATCH
+SUMMARY_HUMAN: Применяю точечный патч.
+NEXT_STEP_HUMAN: Запусти compile.
+TASK_SUMMARY_EN: Replace the leftover Play JSON usage.
+CURRENT_GOAL_EN: Apply exact source replacements.
+PATCH_FORMAT: SEARCH_REPLACE_BLOCKS_V1
+*** BEGIN FILE ***
+PATH: src/main/scala/com/acme/Parser.scala
+OP: REPLACE
+MATCH_COUNT: 1
+@@@SEARCH@@@
+import play.api.libs.json.Json
+@@@REPLACE@@@
+import io.circe.syntax._
+@@@END@@@
+*** END FILE ***
+<<<DEVLOOP_COMMAND_END>>>
+""".strip()
+        envelope = parse_protocol_response(response)
+        self.assertEqual(envelope.command.payload["patch_format"], "search_replace_v1")
+        self.assertEqual(envelope.command.payload["files"][0]["path"], "src/main/scala/com/acme/Parser.scala")
+        self.assertEqual(envelope.command.payload["files"][0]["replacements"][0]["expected_matches"], 1)
+
     def test_parses_search_replace_apply_patch_payload(self) -> None:
         response = """
 Patch ready.
@@ -103,6 +131,31 @@ import play.api.libs.json.Json
         )
         self.assertEqual(len(envelope.command.payload["files"][0]["replacements"]), 2)
         self.assertEqual(envelope.command.payload["files"][0]["replacements"][1]["expected_matches"], 4)
+
+    def test_parses_v2_ask_human_payload(self) -> None:
+        response = """
+<<<DEVLOOP_COMMAND_START>>>
+DEVLOOP_COMMAND_V2
+VERSION: 1
+COMMAND: ASK_HUMAN
+SUMMARY_HUMAN: Нужен прогон тестов.
+NEXT_STEP_HUMAN: Запусти sbt test.
+TASK_SUMMARY_EN: Continue after migration.
+CURRENT_GOAL_EN: Collect the next failing test.
+*** BEGIN REQUESTED_RUN ***
+KIND: sbt
+PURPOSE: Run focused tests
+COMMAND_EXAMPLE: sbt test
+*** END REQUESTED_RUN ***
+*** BEGIN EXPECTED_ARTIFACT ***
+TEXT: First failing test name
+*** END EXPECTED_ARTIFACT ***
+<<<DEVLOOP_COMMAND_END>>>
+""".strip()
+        envelope = parse_protocol_response(response)
+        self.assertEqual(envelope.command.command, "ASK_HUMAN")
+        self.assertEqual(envelope.command.payload["requested_runs"][0]["kind"], "sbt")
+        self.assertEqual(envelope.command.payload["expected_artifacts_from_human"][0], "First failing test name")
 
     def test_rejects_legacy_unified_diff_patch_format(self) -> None:
         response = """

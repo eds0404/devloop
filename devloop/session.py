@@ -13,6 +13,8 @@ from typing import Any
 from devloop.errors import SessionError
 from devloop import yaml_compat as yaml
 
+CURRENT_PROTOCOL_REVISION = "2"
+
 
 @dataclass(slots=True)
 class SessionState:
@@ -20,6 +22,7 @@ class SessionState:
     session_id: str
     initialized: bool
     last_run_at: str
+    protocol_revision: str = CURRENT_PROTOCOL_REVISION
     last_generated_prompt: str = ""
     last_parsed_llm_response: dict[str, Any] = field(default_factory=dict)
     last_applied_patch_summary: str = ""
@@ -49,6 +52,7 @@ class SessionState:
             "session_id": self.session_id,
             "initialized": self.initialized,
             "last_run_at": self.last_run_at,
+            "protocol_revision": self.protocol_revision,
             "last_generated_prompt": self.last_generated_prompt,
             "last_parsed_llm_response": self.last_parsed_llm_response,
             "last_applied_patch_summary": self.last_applied_patch_summary,
@@ -66,6 +70,7 @@ class SessionState:
             session_id=str(data["session_id"]),
             initialized=bool(data.get("initialized", False)),
             last_run_at=str(data.get("last_run_at", _utc_now())),
+            protocol_revision=str(data.get("protocol_revision", "1")),
             last_generated_prompt=str(data.get("last_generated_prompt", "")),
             last_parsed_llm_response=dict(data.get("last_parsed_llm_response", {})),
             last_applied_patch_summary=str(data.get("last_applied_patch_summary", "")),

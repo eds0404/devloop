@@ -15,9 +15,10 @@ class PromptBuilderTests(unittest.TestCase):
         )
         self.assertIn("Machine protocol is mandatory for every reply.", result.text)
         self.assertIn("<<<DEVLOOP_COMMAND_START>>>", result.text)
-        self.assertIn("Every field nested under `payload:` must be indented by two spaces.", result.text)
+        self.assertIn("DEVLOOP_COMMAND_V2", result.text)
+        self.assertIn("Do not use YAML.", result.text)
         self.assertIn("read_around_match", result.text)
-        self.assertIn("Prefer no prose outside the command block.", result.text)
+        self.assertIn("Do not emit prose outside the command block.", result.text)
 
     def test_can_replace_full_protocol_reference_with_short_reminder(self) -> None:
         result = build_context_prompt(
@@ -31,6 +32,8 @@ class PromptBuilderTests(unittest.TestCase):
         )
         self.assertIn("The full protocol reference is intentionally omitted", result.text)
         self.assertNotIn("read_around_match", result.text)
+        self.assertIn("DEVLOOP_COMMAND_V2 line format", result.text)
+        self.assertIn("no-prose-outside-block rule", result.text)
 
     def test_reports_truncation_at_section_boundaries(self) -> None:
         sections = [

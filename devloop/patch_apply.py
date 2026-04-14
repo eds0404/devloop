@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import os
 from pathlib import Path, PurePosixPath
+import shutil
 
-from devloop.errors import PatchApplyError
+from devloop.errors import GitError, PatchApplyError, PatchInfrastructureError
 from devloop.git_tools import list_dirty_paths, run_git, summarize_paths_status
 
 
@@ -14,6 +16,7 @@ from devloop.git_tools import list_dirty_paths, run_git, summarize_paths_status
 class PatchApplyResult:
     affected_files: list[str]
     git_status_summary: str
+    warning: str = ""
 
 
 @dataclass(slots=True)
@@ -30,6 +33,12 @@ class SearchReplaceFilePlan:
     expected_sha256: str | None
     replacements: list[SearchReplaceOp]
     content: str | None = None
+
+
+@dataclass(slots=True)
+class OriginalFileState:
+    existed: bool
+    raw_bytes: bytes | None
 
 
 TEXT_ENCODINGS = ("utf-8", "utf-8-sig", "cp1251", "cp1252", "latin-1")
@@ -65,6 +74,7 @@ def validate_repo_relative_path(path: PurePosixPath) -> PurePosixPath:
         raise PatchApplyError("Patches may not touch .git internals")
     return path
 
+
 def apply_search_replace_patch(
     repo_root: Path,
     payload: dict[str, object],
@@ -84,6 +94,8 @@ def apply_search_replace_patch(
     writes: list[tuple[Path, str, str]] = []
     add_paths: list[Path] = []
     delete_paths: list[Path] = []
+    original_states: dict[Path, OriginalFileState] = {}
+    mutations_started = False
 
     try:
         for plan in plans:
@@ -95,6 +107,7 @@ def apply_search_replace_patch(
                     raise PatchApplyError(
                         f"search_replace_v1 create target already exists: {plan.path.as_posix()}"
                     )
+                original_states[repo_relative_path] = OriginalFileState(existed=False, raw_bytes=None)
                 writes.append((file_path, plan.content or "", "utf-8"))
                 add_paths.append(repo_relative_path)
                 continue
@@ -105,6 +118,7 @@ def apply_search_replace_patch(
                 )
 
             raw_bytes = file_path.read_bytes()
+            original_states[repo_relative_path] = OriginalFileState(existed=True, raw_bytes=raw_bytes)
             if plan.expected_sha256:
                 actual_sha256 = hashlib.sha256(raw_bytes).hexdigest()
                 if actual_sha256 != plan.expected_sha256:
@@ -123,13 +137,26 @@ def apply_search_replace_patch(
             add_paths.append(repo_relative_path)
 
         for file_path, new_text, encoding in writes:
+            mutations_started = True
             file_path.parent.mkdir(parents=True, exist_ok=True)
             file_path.write_bytes(new_text.encode(encoding))
 
-        if delete_paths:
-            run_git(repo_root, ["rm", "--", *[str(path) for path in delete_paths]])
-        if add_paths:
-            run_git(repo_root, ["add", "--", *[str(path) for path in add_paths]])
+        for path in delete_paths:
+            mutations_started = True
+            run_git(repo_root, ["rm", "--", str(path)])
+        for path in add_paths:
+            mutations_started = True
+            try:
+                run_git(repo_root, ["add", "--", str(path)])
+            except Exception as exc:  # noqa: BLE001
+                if _can_continue_without_git_staging(plans, exc):
+                    status_summary = _safe_status_summary(repo_root, repo_relative_paths)
+                    return PatchApplyResult(
+                        affected_files=[plan.path.as_posix() for plan in plans],
+                        git_status_summary=status_summary,
+                        warning=f"Git staging skipped locally: {exc}",
+                    )
+                raise
 
         status_summary = summarize_paths_status(repo_root, repo_relative_paths)
         return PatchApplyResult(
@@ -139,7 +166,15 @@ def apply_search_replace_patch(
     except Exception as exc:  # noqa: BLE001
         if isinstance(exc, PatchApplyError):
             raise
-        raise PatchApplyError(str(exc)) from exc
+        rollback_note = ""
+        if mutations_started:
+            rollback_note = _rollback_search_replace_changes(repo_root, original_states)
+        message = str(exc)
+        if rollback_note:
+            message = f"{message} ({rollback_note})"
+        if mutations_started or isinstance(exc, (GitError, OSError)):
+            raise PatchInfrastructureError(message) from exc
+        raise PatchApplyError(message) from exc
 
 
 def _parse_search_replace_payload(payload: dict[str, object]) -> list[SearchReplaceFilePlan]:
@@ -252,3 +287,47 @@ def _detect_newline_style(text: str) -> str:
 
 def _normalize_text_newlines(text: str) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _rollback_search_replace_changes(
+    repo_root: Path,
+    original_states: dict[Path, OriginalFileState],
+) -> str:
+    try:
+        for repo_relative_path, state in original_states.items():
+            file_path = repo_root / repo_relative_path
+            if state.existed:
+                file_path.parent.mkdir(parents=True, exist_ok=True)
+                file_path.write_bytes(state.raw_bytes or b"")
+            elif file_path.exists():
+                if file_path.is_dir():
+                    shutil.rmtree(file_path, ignore_errors=False)
+                else:
+                    os.chmod(file_path, 0o666)
+                    file_path.unlink()
+
+        for repo_relative_path, state in original_states.items():
+            if state.existed:
+                run_git(repo_root, ["add", "--", str(repo_relative_path)])
+            else:
+                run_git(repo_root, ["rm", "--cached", "--ignore-unmatch", "--", str(repo_relative_path)])
+        return "rollback restored the original local file state"
+    except Exception as rollback_exc:  # noqa: BLE001
+        return f"rollback failed: {rollback_exc}"
+
+
+def _can_continue_without_git_staging(
+    plans: list[SearchReplaceFilePlan],
+    exc: Exception,
+) -> bool:
+    if not plans or any(plan.operation != "replace" for plan in plans):
+        return False
+    message = str(exc).lower()
+    return "index.lock" in message or "permission denied" in message or "access is denied" in message
+
+
+def _safe_status_summary(repo_root: Path, repo_relative_paths: list[Path]) -> str:
+    try:
+        return summarize_paths_status(repo_root, repo_relative_paths)
+    except Exception:  # noqa: BLE001
+        return "\n".join(f"M  {path.as_posix()}" for path in repo_relative_paths)

@@ -2,125 +2,117 @@ Machine protocol is mandatory for every reply.
 
 Return exactly one machine-readable block between these exact markers:
 <<<DEVLOOP_COMMAND_START>>>
-... YAML content ...
+... DEVLOOP_COMMAND_V2 content ...
 <<<DEVLOOP_COMMAND_END>>>
 
 Copy the closest example below and change only the values.
 
 Response discipline:
-- Prefer no prose outside the command block.
-- Use `summary_human` and `next_step_human` for the human-facing explanation.
-- If you add prose outside the block, keep it to at most one short sentence before the block.
+- Put the full human-facing explanation into `SUMMARY_HUMAN` and `NEXT_STEP_HUMAN`.
+- Do not emit prose outside the command block.
 - Never emit a second draft, a corrected second attempt, or repeated copies of the same block.
 
 Hard rules:
 - Do not use Markdown code fences inside the command block.
-- Use YAML only.
-- Use spaces only, not tabs.
-- Use exactly these top-level fields and nothing else:
-  - version
-  - command
-  - summary_human
-  - next_step_human
-  - task_summary_en
-  - current_goal_en
-  - payload
-- `payload` is always the last top-level field.
-- Keep `summary_human` and `next_step_human` in ${human_language_name}.
-- Keep `task_summary_en` and `current_goal_en` in English.
-
-Indentation rules:
-- Every field nested under `payload:` must be indented by two spaces.
-- Every list item nested under a payload field must be indented by four spaces.
-- Never write `payload:` and then start sibling fields on the next line with the same indentation.
+- Do not use YAML.
+- Use line-based `KEY: value` fields and explicit section markers only.
+- Start every block with `DEVLOOP_COMMAND_V2`.
+- Keep `SUMMARY_HUMAN` and `NEXT_STEP_HUMAN` in ${human_language_name}.
+- Keep `TASK_SUMMARY_EN` and `CURRENT_GOAL_EN` in English.
 
 Generic skeleton:
 <<<DEVLOOP_COMMAND_START>>>
-version: "1"
-command: "ASK_HUMAN"
-summary_human: "..."
-next_step_human: "..."
-task_summary_en: "..."
-current_goal_en: "..."
-payload:
-  requested_runs:
-    - kind: "sbt"
-      purpose: "..."
-      command_example: "sbt 'core/IntegrationTest/compile'"
-  expected_artifacts_from_human:
-    - "First failing error block(s) with file paths and line numbers"
+DEVLOOP_COMMAND_V2
+VERSION: 1
+COMMAND: ASK_HUMAN
+SUMMARY_HUMAN: ...
+NEXT_STEP_HUMAN: ...
+TASK_SUMMARY_EN: ...
+CURRENT_GOAL_EN: ...
+*** BEGIN REQUESTED_RUN ***
+KIND: sbt
+PURPOSE: ...
+COMMAND_EXAMPLE: sbt 'core/IntegrationTest/compile'
+*** END REQUESTED_RUN ***
+*** BEGIN EXPECTED_ARTIFACT ***
+TEXT: First failing error block(s) with file paths and line numbers
+*** END EXPECTED_ARTIFACT ***
 <<<DEVLOOP_COMMAND_END>>>
 
 Minimal examples:
 
 ASK_HUMAN:
 <<<DEVLOOP_COMMAND_START>>>
-version: "1"
-command: "ASK_HUMAN"
-summary_human: "..."
-next_step_human: "..."
-task_summary_en: "..."
-current_goal_en: "..."
-payload:
-  requested_runs:
-    - kind: "sbt"
-      purpose: "..."
-      command_example: "sbt test"
+DEVLOOP_COMMAND_V2
+VERSION: 1
+COMMAND: ASK_HUMAN
+SUMMARY_HUMAN: ...
+NEXT_STEP_HUMAN: ...
+TASK_SUMMARY_EN: ...
+CURRENT_GOAL_EN: ...
+*** BEGIN REQUESTED_RUN ***
+KIND: sbt
+PURPOSE: ...
+COMMAND_EXAMPLE: sbt test
+*** END REQUESTED_RUN ***
 <<<DEVLOOP_COMMAND_END>>>
 
 DONE:
 <<<DEVLOOP_COMMAND_START>>>
-version: "1"
-command: "DONE"
-summary_human: "..."
-next_step_human: "..."
-task_summary_en: "..."
-current_goal_en: "..."
-payload: {}
+DEVLOOP_COMMAND_V2
+VERSION: 1
+COMMAND: DONE
+SUMMARY_HUMAN: ...
+NEXT_STEP_HUMAN: ...
+TASK_SUMMARY_EN: ...
+CURRENT_GOAL_EN: ...
 <<<DEVLOOP_COMMAND_END>>>
 
 COLLECT_CONTEXT:
 <<<DEVLOOP_COMMAND_START>>>
-version: "1"
-command: "COLLECT_CONTEXT"
-summary_human: "..."
-next_step_human: "..."
-task_summary_en: "..."
-current_goal_en: "..."
-payload:
-  prompt_goal: "Diagnose the issue and propose the smallest safe next step."
-  queries:
-    - type: "read_snippet"
-      file: "src/main/scala/com/acme/Parser.scala"
-      start_line: 10
-      end_line: 40
+DEVLOOP_COMMAND_V2
+VERSION: 1
+COMMAND: COLLECT_CONTEXT
+SUMMARY_HUMAN: ...
+NEXT_STEP_HUMAN: ...
+TASK_SUMMARY_EN: ...
+CURRENT_GOAL_EN: ...
+PROMPT_GOAL: Diagnose the issue and propose the smallest safe next step.
+*** BEGIN QUERY ***
+TYPE: read_snippet
+FILE: src/main/scala/com/acme/Parser.scala
+START_LINE: 10
+END_LINE: 40
+*** END QUERY ***
 <<<DEVLOOP_COMMAND_END>>>
 
 APPLY_PATCH:
 <<<DEVLOOP_COMMAND_START>>>
-version: "1"
-command: "APPLY_PATCH"
-summary_human: "..."
-next_step_human: "..."
-task_summary_en: "..."
-current_goal_en: "..."
-payload:
-  patch_format: "search_replace_v1"
-  files:
-    - path: "src/main/scala/com/acme/Parser.scala"
-      replacements:
-        - search: |
-            old line
-          replace: |
-            new line
-          expected_matches: 1
+DEVLOOP_COMMAND_V2
+VERSION: 1
+COMMAND: APPLY_PATCH
+SUMMARY_HUMAN: ...
+NEXT_STEP_HUMAN: ...
+TASK_SUMMARY_EN: ...
+CURRENT_GOAL_EN: ...
+PATCH_FORMAT: SEARCH_REPLACE_BLOCKS_V1
+*** BEGIN FILE ***
+PATH: src/main/scala/com/acme/Parser.scala
+OP: REPLACE
+MATCH_COUNT: 1
+@@@SEARCH@@@
+old line
+@@@REPLACE@@@
+new line
+@@@END@@@
+*** END FILE ***
 <<<DEVLOOP_COMMAND_END>>>
 
 Additional APPLY_PATCH rules:
-- Use only `patch_format: "search_replace_v1"`.
-- Use `payload.files` with explicit file operations.
-- For replace operations, each replacement must contain exact `search`, desired `replace`, and explicit `expected_matches`.
-- For create operations, use `content` and omit `replacements`.
-- For delete operations, omit `replacements` and `content`.
+- Use only `PATCH_FORMAT: SEARCH_REPLACE_BLOCKS_V1`.
+- Use one `*** BEGIN FILE ***` section per file.
+- For replace operations, use exact `@@@SEARCH@@@`, exact `@@@REPLACE@@@`, and explicit `MATCH_COUNT`.
+- For create operations, use `OP: CREATE_FILE` and `@@@CONTENT@@@`.
+- For delete operations, use `OP: DELETE_FILE` and no content blocks.
 - Touch only the smallest necessary set of files.
 - Do not emit the same file twice in one patch.

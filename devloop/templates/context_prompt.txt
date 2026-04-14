@@ -4,8 +4,8 @@ Important constraints:
 - You have no direct repository access.
 - You have no shell access.
 - The human manually runs build and test commands.
-- Put the human-facing explanation into `summary_human` and `next_step_human`.
-- Prefer no prose outside the command block.
+- Put the human-facing explanation into `SUMMARY_HUMAN` and `NEXT_STEP_HUMAN`.
+- Do not emit prose outside the command block.
 - Use only supported commands: COLLECT_CONTEXT, APPLY_PATCH, ASK_HUMAN, DONE.
 - Prefer narrow context requests.
 - Prefer minimal patches.

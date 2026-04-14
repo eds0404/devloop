@@ -32,3 +32,7 @@ class GitError(DevloopError):
 class PatchApplyError(DevloopError):
     """Raised when a patch is unsafe or cannot be applied."""
 
+
+class PatchInfrastructureError(PatchApplyError):
+    """Raised when local Git or filesystem state blocks patch application."""
+

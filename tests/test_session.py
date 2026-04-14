@@ -4,9 +4,9 @@ import shutil
 import unittest
 import uuid
 
-from devloop.cli import _build_arg_parser, _load_session_for_run
+from devloop.cli import _build_arg_parser, _load_session_for_run, _refresh_session_protocol_revision
 from devloop.errors import SessionError
-from devloop.session import SessionState, SessionStore
+from devloop.session import CURRENT_PROTOCOL_REVISION, SessionState, SessionStore
 from devloop import yaml_compat as yaml
 
 
@@ -83,10 +83,29 @@ class SessionTests(unittest.TestCase):
             "session_id": "session-id",
             "initialized": True,
             "last_run_at": "2026-01-01T00:00:00+00:00",
+            "protocol_revision": CURRENT_PROTOCOL_REVISION,
             "followup_prompt_count": 3,
         }
         restored = SessionState.from_dict(session)
         self.assertEqual(restored.followup_prompt_count, 3)
+        self.assertEqual(restored.protocol_revision, CURRENT_PROTOCOL_REVISION)
+
+    def test_refresh_session_protocol_revision_resets_old_session(self) -> None:
+        session = SessionState(
+            repo_root="C:\\repo",
+            session_id="session-id",
+            initialized=True,
+            last_run_at="2026-01-01T00:00:00+00:00",
+            protocol_revision="1",
+            last_generated_prompt="old prompt",
+            followup_prompt_count=5,
+        )
+        changed = _refresh_session_protocol_revision(session)
+        self.assertTrue(changed)
+        self.assertFalse(session.initialized)
+        self.assertEqual(session.protocol_revision, CURRENT_PROTOCOL_REVISION)
+        self.assertEqual(session.last_generated_prompt, "")
+        self.assertEqual(session.followup_prompt_count, 0)
 
 
 if __name__ == "__main__":

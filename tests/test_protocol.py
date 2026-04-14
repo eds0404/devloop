@@ -24,6 +24,25 @@ payload:
 <<<DEVLOOP_COMMAND_END>>>
 """.strip()
 
+SAMPLE_RESPONSE_V2 = """
+<<<DEVLOOP_COMMAND_START>>>
+DEVLOOP_COMMAND_V2
+VERSION: 1
+COMMAND: COLLECT_CONTEXT
+SUMMARY_HUMAN: Собираю минимальный контекст.
+NEXT_STEP_HUMAN: Вставь новый prompt в ChatGPT.
+TASK_SUMMARY_EN: Fix the compile issue.
+CURRENT_GOAL_EN: Inspect the parser implementation.
+PROMPT_GOAL: Diagnose the compile failure.
+*** BEGIN QUERY ***
+TYPE: read_snippet
+FILE: src/main/scala/com/acme/Parser.scala
+START_LINE: 10
+END_LINE: 30
+*** END QUERY ***
+<<<DEVLOOP_COMMAND_END>>>
+""".strip()
+
 
 class ProtocolTests(unittest.TestCase):
     def test_extracts_single_command_block(self) -> None:
@@ -54,6 +73,12 @@ class ProtocolTests(unittest.TestCase):
     def test_extracts_command_block_markers(self) -> None:
         block = extract_command_block(SAMPLE_RESPONSE)
         self.assertIn('version: "1"', block)
+
+    def test_parses_v2_collect_context_envelope(self) -> None:
+        envelope = parse_protocol_response(SAMPLE_RESPONSE_V2)
+        self.assertEqual(envelope.command.command, "COLLECT_CONTEXT")
+        self.assertEqual(envelope.command.summary_human, "Собираю минимальный контекст.")
+        self.assertEqual(envelope.command.payload["queries"][0]["type"], "read_snippet")
 
     def test_rejects_multiple_distinct_blocks(self) -> None:
         other = SAMPLE_RESPONSE.replace("COLLECT_CONTEXT", "DONE", 1)

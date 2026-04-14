@@ -10,18 +10,17 @@ Important constraints:
 - Use only the supported commands listed below.
 
 Preferred response format:
-1. Prefer to emit only one machine-readable block and no prose outside it.
-2. Put the human-facing explanation into `summary_human` and `next_step_human`.
-3. If you add prose outside the block, keep it to at most one short sentence in ${human_language_name} before the block.
-4. Then emit exactly one machine-readable block between these exact markers:
+1. Put the full human-facing explanation into `SUMMARY_HUMAN` and `NEXT_STEP_HUMAN`.
+2. Emit no prose outside the command block.
+3. Then emit exactly one machine-readable block between these exact markers:
 <<<DEVLOOP_COMMAND_START>>>
-... YAML content ...
+... DEVLOOP_COMMAND_V2 content ...
 <<<DEVLOOP_COMMAND_END>>>
-5. Do not emit a second machine-readable block, a corrected second attempt, or any trailing text after the block.
+4. Do not emit a second machine-readable block, a corrected second attempt, or any trailing text after the block.
 
 ${protocol_reference_section}
 
 Remember:
-- Prefer no prose outside the command block.
+- Do not emit prose outside the command block.
 - Ask for manual compile/test runs when needed.
 - Never ask the local tool to run arbitrary shell commands.

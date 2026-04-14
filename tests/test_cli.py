@@ -4,12 +4,15 @@ from unittest import mock
 
 from devloop.cli import (
     _build_arg_parser,
+    _handle_apply_patch,
     _maybe_add_project_tree_summary,
     _resolve_detection,
     _should_include_full_protocol_reference,
 )
 from devloop.config import DevloopConfig
 from devloop.detector import ClipboardKind
+from devloop.errors import PatchInfrastructureError
+from devloop.protocol import ProtocolCommand
 from devloop.retrieval import QueryResult
 from devloop.session import SessionState
 
@@ -65,6 +68,38 @@ class CliTests(unittest.TestCase):
         self.assertFalse(_should_include_full_protocol_reference(session))
         session.note_followup_prompt_generated()
         self.assertTrue(_should_include_full_protocol_reference(session))
+
+    def test_local_patch_infrastructure_error_does_not_build_repair_prompt(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        config = DevloopConfig(project_root=repo_root, human_language="en")
+        command = ProtocolCommand(
+            version="1",
+            command="APPLY_PATCH",
+            summary_human="Apply the patch.",
+            next_step_human="Run compile.",
+            task_summary_en="Test patch application.",
+            current_goal_en="Apply a minimal patch.",
+            payload={"patch_format": "search_replace_v1", "files": []},
+        )
+        session = SessionState(
+            repo_root=str(repo_root),
+            session_id="test-session",
+            initialized=True,
+            last_run_at="2026-01-01T00:00:00+00:00",
+        )
+        retriever = mock.Mock()
+        session_store = mock.Mock()
+        session_store.state_dir = repo_root / ".state"
+
+        with mock.patch("devloop.cli.apply_patch_payload", side_effect=PatchInfrastructureError("index.lock denied")):
+            with mock.patch("devloop.cli.set_clipboard_text") as clipboard_mock:
+                with mock.patch("builtins.print") as print_mock:
+                    _handle_apply_patch(command, config, retriever, session_store, session)
+
+        clipboard_mock.assert_not_called()
+        output = "\n".join(str(call.args[0]) for call in print_mock.call_args_list if call.args)
+        self.assertIn("Patch was not applied because of a local Git or filesystem error.", output)
+        self.assertIn("index.lock denied", output)
 
 
 if __name__ == "__main__":

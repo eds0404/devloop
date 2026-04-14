@@ -7,11 +7,10 @@ from pathlib import Path
 import sys
 
 from devloop import __version__
-from devloop import yaml_compat as yaml
 from devloop.clipboard import get_clipboard_text, set_clipboard_text
 from devloop.config import DevloopConfig, default_config_text, load_config
 from devloop.detector import ClipboardKind, DetectionResult, detect_clipboard_content
-from devloop.errors import DevloopError, PatchApplyError, SessionError
+from devloop.errors import DevloopError, PatchApplyError, PatchInfrastructureError, SessionError
 from devloop.git_tools import discover_repo_root
 from devloop.parsers.sbt_compile import parse_sbt_compile_output
 from devloop.parsers.sbt_test import parse_sbt_test_output
@@ -19,7 +18,7 @@ from devloop.patch_apply import apply_patch_payload
 from devloop.prompt_builder import PromptSection, build_bootstrap_prompt, build_context_prompt
 from devloop.protocol import ProtocolCommand, parse_protocol_response
 from devloop.retrieval import QueryResult, RepositoryRetriever
-from devloop.session import SessionState, SessionStore
+from devloop.session import CURRENT_PROTOCOL_REVISION, SessionState, SessionStore
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -48,6 +47,7 @@ def main(argv: list[str] | None = None) -> int:
             force_bootstrap=args.force_bootstrap,
             reset_session=args.reset_session,
         )
+        protocol_reset = _refresh_session_protocol_revision(session)
         session.touch()
 
         if args.force_bootstrap:
@@ -59,6 +59,16 @@ def main(argv: list[str] | None = None) -> int:
                         f"A broken session file was reset: {session_store.session_path}",
                     )
                 )
+            return _handle_first_run(config, repo_root, session_store, session, forced=True)
+
+        if protocol_reset:
+            print(
+                _human_text(
+                    config.human_language,
+                    "Локальная сессия переведена на новую ревизию протокола. Нужен новый bootstrap prompt.",
+                    "The local session was upgraded to a new protocol revision. A fresh bootstrap prompt is required.",
+                )
+            )
             return _handle_first_run(config, repo_root, session_store, session, forced=True)
 
         if not session.initialized:
@@ -138,6 +148,7 @@ def _handle_first_run(
     prompt = build_bootstrap_prompt(repo_root.name, config.human_language_name)
     set_clipboard_text(prompt)
     session.initialized = True
+    session.protocol_revision = CURRENT_PROTOCOL_REVISION
     session.followup_prompt_count = 0
     session.last_generated_prompt = prompt
     session.last_truncation_report = ""
@@ -167,6 +178,18 @@ def _handle_first_run(
         ),
     )
     return 0
+
+
+def _refresh_session_protocol_revision(session: SessionState) -> bool:
+    if session.protocol_revision == CURRENT_PROTOCOL_REVISION:
+        return False
+    session.protocol_revision = CURRENT_PROTOCOL_REVISION
+    session.initialized = False
+    session.followup_prompt_count = 0
+    session.last_generated_prompt = ""
+    session.last_truncation_report = ""
+    session.last_parsed_llm_response = {}
+    return True
 
 
 def _handle_llm_response(
@@ -224,6 +247,14 @@ def _handle_collect_context(
     session.last_generated_prompt = prompt_result.text
     session.last_truncation_report = prompt_result.truncation_report
     session_store.save(session)
+    if result.warning:
+        print(
+            _human_text(
+                config.human_language,
+                f"ÐŸÑ€ÐµÐ´ÑƒÐ¿Ñ€ÐµÐ¶Ð´ÐµÐ½Ð¸Ðµ: {result.warning}",
+                f"Warning: {result.warning}",
+            )
+        )
     print(command.summary_human)
     print(
         _human_text(
@@ -249,6 +280,26 @@ def _handle_apply_patch(
             payload=command.payload,
             allow_apply_on_dirty_files=config.allow_apply_on_dirty_files,
         )
+    except PatchInfrastructureError as exc:
+        session.add_history_entry(f"PATCH_LOCAL_ERROR: {exc}")
+        session_store.save(session)
+        print(
+            _human_text(
+                config.human_language,
+                "Патч не применен из-за локальной ошибки Git или файловой системы.",
+                "Patch was not applied because of a local Git or filesystem error.",
+            )
+        )
+        print(str(exc))
+        _print_next_step(
+            config.human_language,
+            _human_text(
+                config.human_language,
+                "проверь, что другой git-процесс не держит .git/index.lock и что репозиторий доступен на запись, затем снова запусти ту же команду.",
+                "check that no other git process holds .git/index.lock and that the repository is writable, then run the same command again.",
+            ),
+        )
+        return
     except PatchApplyError as exc:
         repair_sections = [
             PromptSection("Patch apply failure", str(exc), required=True),
@@ -257,24 +308,22 @@ def _handle_apply_patch(
                 (
                     "Return exactly one machine-readable command block.\n"
                     "Prefer APPLY_PATCH if you can correct the patch now.\n"
-                    "Use patch_format=search_replace_v1.\n"
-                    "Use payload.files with explicit per-file operations.\n"
-                    "Allowed file operations are replace, create, and delete.\n"
+                    "Use DEVLOOP_COMMAND_V2.\n"
+                    "Use PATCH_FORMAT: SEARCH_REPLACE_BLOCKS_V1.\n"
+                    "Use one file section per path and exact SEARCH/REPLACE blocks.\n"
+                    "Allowed file operations are OP: REPLACE, OP: CREATE_FILE, and OP: DELETE_FILE.\n"
                     "Use COLLECT_CONTEXT only if the current repository context is insufficient.\n"
                     "Use ASK_HUMAN only if a manual run or manual answer is required.\n"
-                    "For replace operations, provide exact current text in each search block and set expected_matches explicitly.\n"
-                    "For create operations, provide content and omit replacements.\n"
-                    "For delete operations, omit replacements and content."
+                    "For replace operations, provide exact current text in each SEARCH block and set MATCH_COUNT explicitly.\n"
+                    "For create operations, provide CONTENT and omit SEARCH/REPLACE blocks.\n"
+                    "For delete operations, omit SEARCH/REPLACE blocks and CONTENT."
                 ),
                 required=True,
             ),
             PromptSection(
                 "Rejected patch payload",
-                yaml.safe_dump(command.payload, sort_keys=False, allow_unicode=True).strip(),
-                compact_body=_compact_body(
-                    yaml.safe_dump(command.payload, sort_keys=False, allow_unicode=True).strip(),
-                    80,
-                ),
+                _render_patch_payload_for_prompt(command.payload),
+                compact_body=_compact_body(_render_patch_payload_for_prompt(command.payload), 80),
             ),
         ]
         source_windows = _build_patch_repair_source_windows(retriever, command.payload)
@@ -514,6 +563,53 @@ def _build_followup_prompt(
     )
     session.note_followup_prompt_generated()
     return prompt_result
+
+
+def _render_patch_payload_for_prompt(payload: dict[str, object]) -> str:
+    if str(payload.get("patch_format", "")) != "search_replace_v1":
+        return str(payload)
+    files = payload.get("files")
+    if not isinstance(files, list) or not files:
+        return "PATCH_FORMAT: SEARCH_REPLACE_BLOCKS_V1"
+
+    rendered: list[str] = ["PATCH_FORMAT: SEARCH_REPLACE_BLOCKS_V1"]
+    for file_entry in files:
+        if not isinstance(file_entry, dict):
+            continue
+        rendered.append("*** BEGIN FILE ***")
+        rendered.append(f"PATH: {str(file_entry.get('path', '')).replace('\\', '/')}")
+        operation = str(file_entry.get("operation", "replace")).strip().lower()
+        if operation == "create":
+            rendered.append("OP: CREATE_FILE")
+        elif operation == "delete":
+            rendered.append("OP: DELETE_FILE")
+        else:
+            rendered.append("OP: REPLACE")
+        expected_sha256 = file_entry.get("expected_sha256")
+        if isinstance(expected_sha256, str) and expected_sha256.strip():
+            rendered.append(f"EXPECTED_SHA256: sha256:{expected_sha256.strip()}")
+
+        if operation == "create":
+            content = file_entry.get("content")
+            if isinstance(content, str):
+                rendered.append("@@@CONTENT@@@")
+                rendered.append(content)
+                rendered.append("@@@END@@@")
+        elif operation == "replace":
+            replacements = file_entry.get("replacements")
+            if isinstance(replacements, list):
+                for replacement in replacements:
+                    if not isinstance(replacement, dict):
+                        continue
+                    expected_matches = replacement.get("expected_matches", 1)
+                    rendered.append(f"MATCH_COUNT: {expected_matches}")
+                    rendered.append("@@@SEARCH@@@")
+                    rendered.append(str(replacement.get("search", "")))
+                    rendered.append("@@@REPLACE@@@")
+                    rendered.append(str(replacement.get("replace", "")))
+                    rendered.append("@@@END@@@")
+        rendered.append("*** END FILE ***")
+    return "\n".join(rendered).strip()
 
 
 def _build_patch_repair_source_windows(retriever: RepositoryRetriever, payload: dict[str, object]) -> str:

@@ -12,6 +12,7 @@ from devloop import yaml_compat as yaml
 
 COMMAND_START = "<<<DEVLOOP_COMMAND_START>>>"
 COMMAND_END = "<<<DEVLOOP_COMMAND_END>>>"
+COMMAND_V2_HEADER = "DEVLOOP_COMMAND_V2"
 SUPPORTED_COMMANDS = {"COLLECT_CONTEXT", "APPLY_PATCH", "ASK_HUMAN", "DONE"}
 ALLOWED_TOP_LEVEL_FIELDS = {
     "version",
@@ -37,7 +38,20 @@ SUPPORTED_QUERY_TYPES = {
     "related_tests",
 }
 SUPPORTED_PATCH_FORMAT = "search_replace_v1"
+SUPPORTED_PATCH_FORMAT_V2 = "SEARCH_REPLACE_BLOCKS_V1"
 SUPPORTED_PATCH_OPERATIONS = {"replace", "create", "delete"}
+FILE_BEGIN = "*** BEGIN FILE ***"
+FILE_END = "*** END FILE ***"
+QUERY_BEGIN = "*** BEGIN QUERY ***"
+QUERY_END = "*** END QUERY ***"
+RUN_BEGIN = "*** BEGIN REQUESTED_RUN ***"
+RUN_END = "*** END REQUESTED_RUN ***"
+ARTIFACT_BEGIN = "*** BEGIN EXPECTED_ARTIFACT ***"
+ARTIFACT_END = "*** END EXPECTED_ARTIFACT ***"
+SEARCH_BEGIN = "@@@SEARCH@@@"
+REPLACE_BEGIN = "@@@REPLACE@@@"
+CONTENT_BEGIN = "@@@CONTENT@@@"
+BLOCK_END = "@@@END@@@"
 
 
 @dataclass(slots=True)
@@ -88,6 +102,20 @@ def extract_command_block(response_text: str) -> str:
 
 def parse_protocol_response(response_text: str) -> ProtocolEnvelope:
     raw_block = extract_command_block(response_text)
+    if _looks_like_v2_protocol_block(raw_block):
+        parsed = _parse_v2_protocol_block(raw_block)
+        command = ProtocolCommand(
+            version=_required_string_like(parsed, "version"),
+            command=_required_string(parsed, "command"),
+            summary_human=_required_string_with_alias(parsed, "summary_human", "summary_ru"),
+            next_step_human=_required_string_with_alias(parsed, "next_step_human", "next_step_ru"),
+            task_summary_en=_required_string(parsed, "task_summary_en"),
+            current_goal_en=_required_string(parsed, "current_goal_en"),
+            payload=_required_dict(parsed, "payload"),
+        )
+        _validate_command(command)
+        human_text = _strip_command_block(response_text, raw_block)
+        return ProtocolEnvelope(human_text=human_text, raw_block=raw_block, command=command)
     try:
         parsed = yaml.safe_load(raw_block)
     except yaml.YAMLError as exc:
@@ -648,3 +676,313 @@ def _dedent_relaxed_block(lines: list[str]) -> str:
     indents = [len(line) - len(line.lstrip(" ")) for line in lines if line.strip()]
     common_indent = min(indents) if indents else 0
     return "\n".join(line[common_indent:] if len(line) >= common_indent else "" for line in lines)
+
+
+def _looks_like_v2_protocol_block(raw_block: str) -> bool:
+    lines = [line.strip() for line in raw_block.splitlines() if line.strip()]
+    if not lines:
+        return False
+    if lines[0] == COMMAND_V2_HEADER:
+        return True
+    return any(line.startswith("COMMAND:") for line in lines[:8])
+
+
+def _parse_v2_protocol_block(raw_block: str) -> dict[str, Any]:
+    lines = raw_block.splitlines()
+    index = _skip_blank_lines(lines, 0)
+    if index < len(lines) and lines[index].strip() == COMMAND_V2_HEADER:
+        index += 1
+
+    top_fields: dict[str, Any] = {}
+    while index < len(lines):
+        index = _skip_blank_lines(lines, index)
+        if index >= len(lines):
+            break
+        stripped = lines[index].strip()
+        if _is_v2_section_marker(stripped):
+            break
+        key, value = _parse_v2_key_value_line(stripped)
+        normalized_key = _normalize_v2_key(key)
+        if not normalized_key:
+            raise ProtocolError(f"Unsupported DEVLOOP_COMMAND_V2 field: {key}")
+        top_fields[normalized_key] = _parse_relaxed_scalar(value)
+        index += 1
+
+    command = str(top_fields.get("command", "")).strip()
+    payload = _parse_v2_payload(command, top_fields, lines, index)
+    parsed = {
+        "version": str(top_fields.get("version", "")).strip(),
+        "command": command,
+        "summary_human": str(top_fields.get("summary_human", "")).strip(),
+        "next_step_human": str(top_fields.get("next_step_human", "")).strip(),
+        "task_summary_en": str(top_fields.get("task_summary_en", "")).strip(),
+        "current_goal_en": str(top_fields.get("current_goal_en", "")).strip(),
+        "payload": payload,
+    }
+    return parsed
+
+
+def _parse_v2_payload(
+    command: str,
+    top_fields: dict[str, Any],
+    lines: list[str],
+    index: int,
+) -> dict[str, Any]:
+    if command == "DONE":
+        _ensure_only_blank_tail(lines, index)
+        return {}
+    if command == "ASK_HUMAN":
+        return _parse_v2_ask_human_payload(lines, index)
+    if command == "COLLECT_CONTEXT":
+        return _parse_v2_collect_context_payload(top_fields, lines, index)
+    if command == "APPLY_PATCH":
+        return _parse_v2_apply_patch_payload(top_fields, lines, index)
+    raise ProtocolError(f"Unsupported command: {command}")
+
+
+def _parse_v2_ask_human_payload(lines: list[str], index: int) -> dict[str, Any]:
+    runs: list[dict[str, Any]] = []
+    artifacts: list[str] = []
+    while True:
+        index = _skip_blank_lines(lines, index)
+        if index >= len(lines):
+            break
+        stripped = lines[index].strip()
+        if stripped == RUN_BEGIN:
+            section_lines, index = _collect_v2_section(lines, index + 1, RUN_END)
+            runs.append(_parse_v2_mapping_section(section_lines))
+            continue
+        if stripped == ARTIFACT_BEGIN:
+            section_lines, index = _collect_v2_section(lines, index + 1, ARTIFACT_END)
+            artifacts.append(_parse_v2_text_section(section_lines))
+            continue
+        raise ProtocolError(f"Unexpected DEVLOOP_COMMAND_V2 ASK_HUMAN payload line: {stripped}")
+    payload: dict[str, Any] = {}
+    if runs:
+        payload["requested_runs"] = runs
+    if artifacts:
+        payload["expected_artifacts_from_human"] = artifacts
+    return payload
+
+
+def _parse_v2_collect_context_payload(
+    top_fields: dict[str, Any],
+    lines: list[str],
+    index: int,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    prompt_goal = top_fields.get("prompt_goal")
+    if isinstance(prompt_goal, str) and prompt_goal.strip():
+        payload["prompt_goal"] = prompt_goal.strip()
+
+    queries: list[dict[str, Any]] = []
+    while True:
+        index = _skip_blank_lines(lines, index)
+        if index >= len(lines):
+            break
+        stripped = lines[index].strip()
+        if stripped != QUERY_BEGIN:
+            raise ProtocolError(f"Unexpected DEVLOOP_COMMAND_V2 COLLECT_CONTEXT payload line: {stripped}")
+        section_lines, index = _collect_v2_section(lines, index + 1, QUERY_END)
+        queries.append(_parse_v2_mapping_section(section_lines))
+    payload["queries"] = queries
+    return payload
+
+
+def _parse_v2_apply_patch_payload(
+    top_fields: dict[str, Any],
+    lines: list[str],
+    index: int,
+) -> dict[str, Any]:
+    patch_format = str(top_fields.get("patch_format", "")).strip()
+    if patch_format and patch_format != SUPPORTED_PATCH_FORMAT_V2:
+        raise ProtocolError(
+            f"Unsupported DEVLOOP_COMMAND_V2 PATCH_FORMAT: {patch_format}. "
+            f"Expected {SUPPORTED_PATCH_FORMAT_V2}."
+        )
+
+    files: list[dict[str, Any]] = []
+    while True:
+        index = _skip_blank_lines(lines, index)
+        if index >= len(lines):
+            break
+        stripped = lines[index].strip()
+        if stripped != FILE_BEGIN:
+            raise ProtocolError(f"Unexpected DEVLOOP_COMMAND_V2 APPLY_PATCH payload line: {stripped}")
+        file_entry, index = _parse_v2_file_section(lines, index + 1)
+        files.append(file_entry)
+    return {
+        "patch_format": SUPPORTED_PATCH_FORMAT,
+        "files": files,
+    }
+
+
+def _parse_v2_file_section(lines: list[str], index: int) -> tuple[dict[str, Any], int]:
+    path: str | None = None
+    operation = "replace"
+    expected_sha256: str | None = None
+    replacements: list[dict[str, Any]] = []
+    content: str | None = None
+    pending_match_count = 1
+
+    while True:
+        index = _skip_blank_lines(lines, index)
+        if index >= len(lines):
+            raise ProtocolError(f"Missing {FILE_END} in DEVLOOP_COMMAND_V2 APPLY_PATCH payload")
+        stripped = lines[index].strip()
+        if stripped == FILE_END:
+            index += 1
+            break
+        if stripped == SEARCH_BEGIN:
+            search_text, index = _collect_v2_block(lines, index + 1, REPLACE_BEGIN)
+            replace_text, index = _collect_v2_block(lines, index, BLOCK_END)
+            replacements.append(
+                {
+                    "search": search_text,
+                    "replace": replace_text,
+                    "expected_matches": pending_match_count,
+                }
+            )
+            pending_match_count = 1
+            continue
+        if stripped == CONTENT_BEGIN:
+            content, index = _collect_v2_block(lines, index + 1, BLOCK_END)
+            continue
+
+        key, value = _parse_v2_key_value_line(stripped)
+        if key == "PATH":
+            path = str(_parse_relaxed_scalar(value))
+        elif key in {"OP", "OPERATION"}:
+            operation = _normalize_v2_file_operation(value)
+        elif key == "EXPECTED_SHA256":
+            expected_sha256 = str(_parse_relaxed_scalar(value)).removeprefix("sha256:").strip()
+        elif key in {"MATCH_COUNT", "EXPECTED_MATCHES"}:
+            pending_match_count = int(_parse_relaxed_scalar(value))
+        else:
+            raise ProtocolError(f"Unsupported DEVLOOP_COMMAND_V2 APPLY_PATCH file field: {key}")
+        index += 1
+
+    if not path:
+        raise ProtocolError("Each DEVLOOP_COMMAND_V2 file section must define PATH")
+
+    file_entry: dict[str, Any] = {
+        "path": path,
+        "operation": operation,
+    }
+    if expected_sha256:
+        file_entry["expected_sha256"] = expected_sha256
+    if operation == "replace":
+        file_entry["replacements"] = replacements
+    elif operation == "create":
+        file_entry["content"] = content or ""
+    return file_entry, index
+
+
+def _parse_v2_mapping_section(lines: list[str]) -> dict[str, Any]:
+    parsed: dict[str, Any] = {}
+    for raw_line in lines:
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        key, value = _parse_v2_key_value_line(stripped)
+        normalized_key = _normalize_v2_nested_key(key)
+        parsed[normalized_key] = _parse_relaxed_scalar(value)
+    return parsed
+
+
+def _parse_v2_text_section(lines: list[str]) -> str:
+    text = "\n".join(line.rstrip() for line in lines).strip()
+    if text.startswith("TEXT:"):
+        return text.split(":", 1)[1].strip()
+    return text
+
+
+def _collect_v2_section(lines: list[str], index: int, end_marker: str) -> tuple[list[str], int]:
+    collected: list[str] = []
+    while index < len(lines):
+        stripped = lines[index].strip()
+        if stripped == end_marker:
+            return collected, index + 1
+        collected.append(lines[index])
+        index += 1
+    raise ProtocolError(f"Missing {end_marker} in DEVLOOP_COMMAND_V2 payload")
+
+
+def _collect_v2_block(lines: list[str], index: int, end_marker: str) -> tuple[str, int]:
+    collected: list[str] = []
+    while index < len(lines):
+        stripped = lines[index].strip()
+        if stripped == end_marker:
+            return _dedent_relaxed_block(collected), index + 1
+        collected.append(lines[index])
+        index += 1
+    raise ProtocolError(f"Missing {end_marker} in DEVLOOP_COMMAND_V2 block payload")
+
+
+def _normalize_v2_file_operation(value: str) -> str:
+    normalized = str(_parse_relaxed_scalar(value)).strip().upper()
+    mapping = {
+        "REPLACE": "replace",
+        "CREATE": "create",
+        "CREATE_FILE": "create",
+        "DELETE": "delete",
+        "DELETE_FILE": "delete",
+    }
+    if normalized not in mapping:
+        raise ProtocolError(f"Unsupported DEVLOOP_COMMAND_V2 file operation: {value}")
+    return mapping[normalized]
+
+
+def _normalize_v2_key(key: str) -> str:
+    mapping = {
+        "VERSION": "version",
+        "COMMAND": "command",
+        "SUMMARY_HUMAN": "summary_human",
+        "NEXT_STEP_HUMAN": "next_step_human",
+        "TASK_SUMMARY_EN": "task_summary_en",
+        "CURRENT_GOAL_EN": "current_goal_en",
+        "PROMPT_GOAL": "prompt_goal",
+        "PATCH_FORMAT": "patch_format",
+    }
+    return mapping.get(key, "")
+
+
+def _normalize_v2_nested_key(key: str) -> str:
+    mapping = {
+        "TYPE": "type",
+        "QUERY": "query",
+        "GLOB": "glob",
+        "LIMIT": "limit",
+        "FILE": "file",
+        "START_LINE": "start_line",
+        "END_LINE": "end_line",
+        "BEFORE": "before",
+        "AFTER": "after",
+        "KIND": "kind",
+        "PURPOSE": "purpose",
+        "COMMAND_EXAMPLE": "command_example",
+    }
+    return mapping.get(key, key.lower())
+
+
+def _parse_v2_key_value_line(stripped: str) -> tuple[str, str]:
+    match = re.match(r"^([A-Z_]+):\s*(.*)$", stripped)
+    if not match:
+        raise ProtocolError(f"Expected DEVLOOP_COMMAND_V2 key/value line, got: {stripped}")
+    return match.group(1), match.group(2)
+
+
+def _skip_blank_lines(lines: list[str], index: int) -> int:
+    while index < len(lines) and not lines[index].strip():
+        index += 1
+    return index
+
+
+def _ensure_only_blank_tail(lines: list[str], index: int) -> None:
+    index = _skip_blank_lines(lines, index)
+    if index != len(lines):
+        raise ProtocolError("Unexpected trailing content after DEVLOOP_COMMAND_V2 payload")
+
+
+def _is_v2_section_marker(stripped: str) -> bool:
+    return stripped in {FILE_BEGIN, QUERY_BEGIN, RUN_BEGIN, ARTIFACT_BEGIN}
