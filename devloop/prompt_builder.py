@@ -147,8 +147,10 @@ def build_protocol_reference_section(human_language_name: str, include_full_refe
         "Protocol reminder",
         (
             "The full protocol reference is intentionally omitted in this prompt to save space. "
-            "Follow the same devloop machine block markers, DEVLOOP_COMMAND_V2 line format, "
-            "command allowlist, no-prose-outside-block rule, and section marker rules exactly as in the previous prompts."
+            "Return exactly one DEVLOOP_COMMAND_V2 block between the standard markers. "
+            "Do not use YAML. Do not add prose outside the block. "
+            "Use only COLLECT_CONTEXT, APPLY_PATCH, ASK_HUMAN, or DONE. "
+            "For APPLY_PATCH, use PATCH_FORMAT: SEARCH_REPLACE_BLOCKS_V1 and the same file section markers as in the previous prompts."
         ),
     )
 

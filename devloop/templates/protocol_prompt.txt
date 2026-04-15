@@ -9,7 +9,7 @@ Important constraints:
 - Prefer minimal patches over large refactors.
 - Use only the supported commands listed below.
 
-Preferred response format:
+Required response format:
 1. Put the full human-facing explanation into `SUMMARY_HUMAN` and `NEXT_STEP_HUMAN`.
 2. Emit no prose outside the command block.
 3. Then emit exactly one machine-readable block between these exact markers:
