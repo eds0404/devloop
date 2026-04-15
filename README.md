@@ -50,6 +50,13 @@ Optional troubleshooting flags:
 - `--force-mode llm|compile|test|raw` overrides clipboard auto-detection for the current run.
 - `--reset-session` recreates the local session metadata for the current repository.
 
+Run log:
+
+- Every run with `--config ...` appends one flat-text entry to `.devloop.log` next to the config file.
+- Each entry contains the current `devloop` Git HEAD, CLI arguments, clipboard input, raw config file text, console output, and the clipboard text written by `devloop`.
+- For `APPLY_PATCH`, the same log also records the extracted machine block, protocol parse mode, normalized patch payload, patch id, target repository state before and after the attempt, per-file sha256 values, replacement match results, resulting diff, and exact failure stage when a patch is rejected.
+- The log is append-only and intended for diagnosis of protocol, parser, and clipboard issues.
+
 Example config:
 
 ```yaml

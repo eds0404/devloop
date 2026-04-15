@@ -29,6 +29,7 @@ import io.circe.syntax._
 <<<DEVLOOP_COMMAND_END>>>
 """.strip()
         envelope = parse_protocol_response(response)
+        self.assertEqual(envelope.parse_mode, "v2_strict")
         self.assertEqual(envelope.command.payload["patch_format"], "search_replace_v1")
         self.assertEqual(envelope.command.payload["files"][0]["path"], "src/main/scala/com/acme/Parser.scala")
         self.assertEqual(envelope.command.payload["files"][0]["replacements"][0]["expected_matches"], 1)
@@ -58,6 +59,7 @@ new
 <<<DEVLOOP_COMMAND_END>>>
 """.strip()
         envelope = parse_protocol_response(response)
+        self.assertEqual(envelope.parse_mode, "v2_relaxed")
         self.assertEqual(envelope.command.payload["patch_format"], "search_replace_v1")
         self.assertEqual(envelope.command.payload["files"][0]["expected_sha256"], "abc123")
         self.assertEqual(envelope.command.payload["files"][0]["replacements"][0]["search"], "old")

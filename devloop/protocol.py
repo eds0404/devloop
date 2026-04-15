@@ -76,6 +76,7 @@ class ProtocolCommand:
 class ProtocolEnvelope:
     human_text: str
     raw_block: str
+    parse_mode: str
     command: ProtocolCommand
 
 
@@ -107,7 +108,12 @@ def parse_protocol_response(response_text: str) -> ProtocolEnvelope:
     )
     _validate_command(command)
     human_text = _strip_command_block(response_text, raw_block)
-    return ProtocolEnvelope(human_text=human_text, raw_block=raw_block, command=command)
+    return ProtocolEnvelope(
+        human_text=human_text,
+        raw_block=raw_block,
+        parse_mode=_detect_v2_parse_mode(raw_block),
+        command=command,
+    )
 
 
 def _validate_command(command: ProtocolCommand) -> None:
@@ -608,3 +614,36 @@ def _is_v2_section_marker(stripped: str) -> bool:
 
 def _normalize_v2_token(value: str) -> str:
     return value.strip().upper()
+
+
+def _detect_v2_parse_mode(raw_block: str) -> str:
+    lines = [line for line in raw_block.splitlines() if line.strip()]
+    if not lines:
+        return "v2_strict"
+    if lines[0].strip() != COMMAND_V2_HEADER:
+        return "v2_relaxed"
+    for line in lines[1:]:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if ":" in stripped:
+            key = stripped.split(":", 1)[0]
+            if key != key.upper():
+                return "v2_relaxed"
+        normalized = _normalize_v2_token(stripped)
+        if normalized in {
+            FILE_BEGIN,
+            FILE_END,
+            QUERY_BEGIN,
+            QUERY_END,
+            RUN_BEGIN,
+            RUN_END,
+            ARTIFACT_BEGIN,
+            ARTIFACT_END,
+            SEARCH_BEGIN,
+            REPLACE_BEGIN,
+            CONTENT_BEGIN,
+            BLOCK_END,
+        } and stripped != normalized:
+            return "v2_relaxed"
+    return "v2_strict"

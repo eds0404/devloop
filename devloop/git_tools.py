@@ -77,6 +77,29 @@ def run_git(
         raise GitError(stderr or f"Git command failed: {' '.join(args)}") from exc
 
 
+def get_head_commit(repo_root: Path) -> str:
+    result = run_git(repo_root, ["rev-parse", "HEAD"])
+    return result.stdout.strip()
+
+
+def get_paths_diff(repo_root: Path, paths: list[Path]) -> str:
+    if not paths:
+        return ""
+    rendered_paths = [str(path) for path in paths]
+    sections: list[str] = []
+    cached = run_git(repo_root, ["diff", "--cached", "--", *rendered_paths]).stdout.strip()
+    if cached:
+        sections.append("BEGIN CACHED DIFF")
+        sections.append(cached)
+        sections.append("END CACHED DIFF")
+    worktree = run_git(repo_root, ["diff", "--", *rendered_paths]).stdout.strip()
+    if worktree:
+        sections.append("BEGIN WORKTREE DIFF")
+        sections.append(worktree)
+        sections.append("END WORKTREE DIFF")
+    return "\n".join(sections).strip()
+
+
 def list_dirty_paths(repo_root: Path, paths: list[Path]) -> list[str]:
     if not paths:
         return []

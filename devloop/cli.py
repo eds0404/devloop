@@ -3,23 +3,30 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import hashlib
+import io
 from pathlib import Path
 import re
 import sys
 
 from devloop import __version__
-from devloop.clipboard import get_clipboard_text, set_clipboard_text
+from devloop.clipboard import get_clipboard_text as _system_get_clipboard_text
+from devloop.clipboard import set_clipboard_text as _system_set_clipboard_text
 from devloop.config import DevloopConfig, default_config_text, load_config
 from devloop.detector import ClipboardKind, DetectionResult, detect_clipboard_content
-from devloop.errors import DevloopError, PatchApplyError, PatchInfrastructureError, SessionError
-from devloop.git_tools import discover_repo_root
+from devloop.errors import DevloopError, PatchApplyError, PatchInfrastructureError, ProtocolError, SessionError
+from devloop.git_tools import discover_repo_root, get_head_commit, get_paths_diff, summarize_paths_status
 from devloop.parsers.sbt_compile import parse_sbt_compile_output
 from devloop.parsers.sbt_test import parse_sbt_test_output
 from devloop.patch_apply import apply_patch_payload
 from devloop.prompt_builder import PromptSection, build_bootstrap_prompt, build_context_prompt
-from devloop.protocol import ProtocolCommand, parse_protocol_response
+from devloop.protocol import ProtocolCommand, extract_command_block, parse_protocol_response
 from devloop.retrieval import QueryResult, RepositoryRetriever
+from devloop.runlog import RunLogRecorder
 from devloop.session import CURRENT_PROTOCOL_REVISION, SessionState, SessionStore
+
+_ACTIVE_RUN_LOG: RunLogRecorder | None = None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -27,89 +34,104 @@ def main(argv: list[str] | None = None) -> int:
     parser = _build_arg_parser()
     args = parser.parse_args(argv)
 
-    if args.version:
-        print(__version__)
-        return 0
-    if args.print_default_config:
-        print(default_config_text())
-        return 0
-    if not args.config:
-        parser.error("--config is required unless --print-default-config or --version is used")
+    run_log = _create_run_log_recorder(args, argv)
+    exit_code = 1
 
-    session_store: SessionStore | None = None
-    session: SessionState | None = None
+    with _stdout_tee_context(run_log):
+        session_store: SessionStore | None = None
+        session: SessionState | None = None
 
-    try:
-        config = load_config(Path(args.config))
-        repo_root = discover_repo_root(config.project_root)
-        session_store = SessionStore(repo_root, config.state_dir_mode)
-        session, recovered_session = _load_session_for_run(
-            session_store,
-            force_bootstrap=args.force_bootstrap,
-            reset_session=args.reset_session,
-        )
-        protocol_reset = _refresh_session_protocol_revision(session)
-        session.touch()
+        try:
+            if args.version:
+                print(__version__)
+                exit_code = 0
+                return exit_code
+            if args.print_default_config:
+                print(default_config_text())
+                exit_code = 0
+                return exit_code
+            if not args.config:
+                parser.error("--config is required unless --print-default-config or --version is used")
 
-        if args.force_bootstrap:
-            if recovered_session:
+            config = load_config(Path(args.config))
+            repo_root = discover_repo_root(config.project_root)
+            session_store = SessionStore(repo_root, config.state_dir_mode)
+            session, recovered_session = _load_session_for_run(
+                session_store,
+                force_bootstrap=args.force_bootstrap,
+                reset_session=args.reset_session,
+            )
+            protocol_reset = _refresh_session_protocol_revision(session)
+            session.touch()
+
+            if args.force_bootstrap:
+                if recovered_session:
+                    print(
+                        _human_text(
+                            config.human_language,
+                            f"ÐŸÐ¾Ð²Ñ€ÐµÐ¶Ð´ÐµÐ½Ð½Ð°Ñ session file Ð±Ñ‹Ð»Ð° ÑÐ±Ñ€Ð¾ÑˆÐµÐ½Ð°: {session_store.session_path}",
+                            f"A broken session file was reset: {session_store.session_path}",
+                        )
+                    )
+                exit_code = _handle_first_run(config, repo_root, session_store, session, forced=True)
+                return exit_code
+
+            if protocol_reset:
                 print(
                     _human_text(
                         config.human_language,
-                        f"ÐŸÐ¾Ð²Ñ€ÐµÐ¶Ð´ÐµÐ½Ð½Ð°Ñ session file Ð±Ñ‹Ð»Ð° ÑÐ±Ñ€Ð¾ÑˆÐµÐ½Ð°: {session_store.session_path}",
-                        f"A broken session file was reset: {session_store.session_path}",
+                        "Ð›Ð¾ÐºÐ°Ð»ÑŒÐ½Ð°Ñ ÑÐµÑÑÐ¸Ñ Ð¿ÐµÑ€ÐµÐ²ÐµÐ´ÐµÐ½Ð° Ð½Ð° Ð½Ð¾Ð²ÑƒÑŽ Ñ€ÐµÐ²Ð¸Ð·Ð¸ÑŽ Ð¿Ñ€Ð¾Ñ‚Ð¾ÐºÐ¾Ð»Ð°. ÐÑƒÐ¶ÐµÐ½ Ð½Ð¾Ð²Ñ‹Ð¹ bootstrap prompt.",
+                        "The local session was upgraded to a new protocol revision. A fresh bootstrap prompt is required.",
                     )
                 )
-            return _handle_first_run(config, repo_root, session_store, session, forced=True)
+                exit_code = _handle_first_run(config, repo_root, session_store, session, forced=True)
+                return exit_code
 
-        if protocol_reset:
-            print(
-                _human_text(
-                    config.human_language,
-                    "Ð›Ð¾ÐºÐ°Ð»ÑŒÐ½Ð°Ñ ÑÐµÑÑÐ¸Ñ Ð¿ÐµÑ€ÐµÐ²ÐµÐ´ÐµÐ½Ð° Ð½Ð° Ð½Ð¾Ð²ÑƒÑŽ Ñ€ÐµÐ²Ð¸Ð·Ð¸ÑŽ Ð¿Ñ€Ð¾Ñ‚Ð¾ÐºÐ¾Ð»Ð°. ÐÑƒÐ¶ÐµÐ½ Ð½Ð¾Ð²Ñ‹Ð¹ bootstrap prompt.",
-                    "The local session was upgraded to a new protocol revision. A fresh bootstrap prompt is required.",
+            if not session.initialized:
+                exit_code = _handle_first_run(config, repo_root, session_store, session)
+                return exit_code
+
+            clipboard_text_raw = get_clipboard_text()
+            clipboard_text = clipboard_text_raw.strip()
+            if not clipboard_text:
+                raise DevloopError(
+                    _human_text(
+                        config.human_language,
+                        "Ð‘ÑƒÑ„ÐµÑ€ Ð¾Ð±Ð¼ÐµÐ½Ð° Ð¿ÑƒÑÑ‚. Ð¡ÐºÐ¾Ð¿Ð¸Ñ€ÑƒÐ¹ Ð¾Ñ‚Ð²ÐµÑ‚ ChatGPT Ð¸Ð»Ð¸ Ð»Ð¾Ð³ Ð¸ Ð·Ð°Ð¿ÑƒÑÑ‚Ð¸ ÐºÐ¾Ð¼Ð°Ð½Ð´Ñƒ ÑÐ½Ð¾Ð²Ð°.",
+                        "Clipboard is empty. Copy a ChatGPT response or a log and run the command again.",
+                    )
                 )
-            )
-            return _handle_first_run(config, repo_root, session_store, session, forced=True)
 
-        if not session.initialized:
-            return _handle_first_run(config, repo_root, session_store, session)
+            detection, forced_mode = _resolve_detection(clipboard_text, args.force_mode, session)
+            _print_mode_message(detection.kind, config.human_language, forced=forced_mode)
+            _record_detection(detection, forced_mode)
 
-        clipboard_text = get_clipboard_text().strip()
-        if not clipboard_text:
-            raise DevloopError(
-                _human_text(
-                    config.human_language,
-                    "Ð‘ÑƒÑ„ÐµÑ€ Ð¾Ð±Ð¼ÐµÐ½Ð° Ð¿ÑƒÑÑ‚. Ð¡ÐºÐ¾Ð¿Ð¸Ñ€ÑƒÐ¹ Ð¾Ñ‚Ð²ÐµÑ‚ ChatGPT Ð¸Ð»Ð¸ Ð»Ð¾Ð³ Ð¸ Ð·Ð°Ð¿ÑƒÑÑ‚Ð¸ ÐºÐ¾Ð¼Ð°Ð½Ð´Ñƒ ÑÐ½Ð¾Ð²Ð°.",
-                    "Clipboard is empty. Copy a ChatGPT response or a log and run the command again.",
-                )
-            )
+            retriever = RepositoryRetriever(repo_root, config)
 
-        detection, forced_mode = _resolve_detection(clipboard_text, args.force_mode, session)
-        _print_mode_message(detection.kind, config.human_language, forced=forced_mode)
+            if detection.kind == ClipboardKind.LLM_RESPONSE:
+                _handle_llm_response(clipboard_text, config, retriever, session_store, session)
+            elif detection.kind == ClipboardKind.SBT_COMPILE:
+                _handle_compile_log(clipboard_text, config, retriever, session_store, session)
+            elif detection.kind == ClipboardKind.SBT_TEST:
+                _handle_test_log(clipboard_text, config, retriever, session_store, session)
+            else:
+                _handle_raw_clipboard(clipboard_text, config, retriever, session_store, session)
 
-        retriever = RepositoryRetriever(repo_root, config)
-
-        if detection.kind == ClipboardKind.LLM_RESPONSE:
-            _handle_llm_response(clipboard_text, config, retriever, session_store, session)
-        elif detection.kind == ClipboardKind.SBT_COMPILE:
-            _handle_compile_log(clipboard_text, config, retriever, session_store, session)
-        elif detection.kind == ClipboardKind.SBT_TEST:
-            _handle_test_log(clipboard_text, config, retriever, session_store, session)
-        else:
-            _handle_raw_clipboard(clipboard_text, config, retriever, session_store, session)
-
-        return 0
-    except DevloopError as exc:
-        print(_human_text(config.human_language if 'config' in locals() else "ru", f"ÐžÑˆÐ¸Ð±ÐºÐ°: {exc}", f"Error: {exc}"))
-        return 1
-    finally:
-        if session_store and session:
-            try:
-                session.touch()
-                session_store.save(session)
-            except DevloopError:
-                pass
+            exit_code = 0
+            return exit_code
+        except DevloopError as exc:
+            print(_human_text(config.human_language if 'config' in locals() else "ru", f"ÐžÑˆÐ¸Ð±ÐºÐ°: {exc}", f"Error: {exc}"))
+            exit_code = 1
+            return exit_code
+        finally:
+            if session_store and session:
+                try:
+                    session.touch()
+                    session_store.save(session)
+                except DevloopError:
+                    pass
+            if run_log:
+                run_log.finalize(exit_code)
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
@@ -137,6 +159,327 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--print-default-config", action="store_true", help="Print default YAML config and exit.")
     parser.add_argument("--version", action="store_true", help="Print version and exit.")
     return parser
+
+
+def _create_run_log_recorder(args: argparse.Namespace, argv: list[str] | None) -> RunLogRecorder | None:
+    config_value = getattr(args, "config", None)
+    if not config_value:
+        return None
+    cli_args = list(argv) if argv is not None else sys.argv[1:]
+    return RunLogRecorder(Path(config_value), cli_args)
+
+
+@contextlib.contextmanager
+def _stdout_tee_context(run_log: RunLogRecorder | None):
+    global _ACTIVE_RUN_LOG
+    previous_run_log = _ACTIVE_RUN_LOG
+    _ACTIVE_RUN_LOG = run_log
+    if run_log is None:
+        try:
+            yield
+        finally:
+            _ACTIVE_RUN_LOG = previous_run_log
+        return
+
+    tee = _ConsoleTee(sys.stdout, run_log)
+    with contextlib.redirect_stdout(tee):
+        try:
+            yield
+        finally:
+            _ACTIVE_RUN_LOG = previous_run_log
+
+
+def get_clipboard_text() -> str:
+    text = _system_get_clipboard_text()
+    if _ACTIVE_RUN_LOG is not None:
+        _ACTIVE_RUN_LOG.record_clipboard_before(text)
+    return text
+
+
+def set_clipboard_text(text: str) -> None:
+    _system_set_clipboard_text(text)
+    if _ACTIVE_RUN_LOG is not None:
+        _ACTIVE_RUN_LOG.record_clipboard_after(text)
+
+
+def _record_detection(detection: DetectionResult, forced: bool) -> None:
+    if _ACTIVE_RUN_LOG is None:
+        return
+    lines = [
+        f"Clipboard kind: {detection.kind.value}",
+        f"Forced mode: {'yes' if forced else 'no'}",
+        f"Score: {detection.score}",
+        "Detection reasons:",
+    ]
+    if detection.reasons:
+        lines.extend(f"  - {reason}" for reason in detection.reasons)
+    else:
+        lines.append("  - <none>")
+    _ACTIVE_RUN_LOG.add_section("CLIPBOARD CLASSIFICATION", "\n".join(lines))
+
+
+def _record_llm_command_context(envelope, session: SessionState) -> None:
+    if _ACTIVE_RUN_LOG is None:
+        return
+    command = envelope.command
+    _ACTIVE_RUN_LOG.add_section("LLM COMMAND BLOCK", envelope.raw_block)
+    lines = [
+        f"Session id: {session.session_id}",
+        f"Protocol parse mode: {envelope.parse_mode}",
+        f"Command: {command.command}",
+        f"Task summary (EN): {command.task_summary_en}",
+        f"Current goal (EN): {command.current_goal_en}",
+        f"Summary for human: {command.summary_human}",
+        f"Next step for human: {command.next_step_human}",
+        f"Payload keys: {', '.join(sorted(command.payload.keys())) or '<none>'}",
+    ]
+    _ACTIVE_RUN_LOG.add_section("LLM COMMAND SUMMARY", "\n".join(lines))
+
+
+def _record_llm_protocol_failure(clipboard_text: str, session: SessionState | None, exc: ProtocolError) -> None:
+    if _ACTIVE_RUN_LOG is None:
+        return
+    raw_block = ""
+    try:
+        raw_block = extract_command_block(clipboard_text)
+    except ProtocolError:
+        pass
+    if raw_block:
+        _ACTIVE_RUN_LOG.add_section("LLM COMMAND BLOCK", raw_block)
+    lines = [
+        f"Session id: {session.session_id if session is not None else '<unknown>'}",
+        "Protocol parse mode: failed_before_command",
+        "Patch decision: rejected",
+        "Failure stage: protocol_parse",
+        f"Failure reason: {exc}",
+    ]
+    if raw_block and "APPLY_PATCH" in raw_block.upper():
+        _ACTIVE_RUN_LOG.add_section("PATCH VALIDATION", "\n".join(lines))
+
+
+def _record_patch_attempt_start(
+    command: ProtocolCommand,
+    session: SessionState,
+    repo_root: Path,
+    parse_mode: str,
+) -> tuple[str, list[Path], str, str]:
+    normalized_payload = _render_patch_payload_for_prompt(command.payload)
+    patch_id = hashlib.sha256(normalized_payload.encode("utf-8")).hexdigest()[:12]
+    affected_paths = _extract_patch_repo_paths(command.payload)
+    repo_head_before = _safe_get_head_commit(repo_root)
+    status_before = _safe_status_summary(repo_root, affected_paths)
+
+    if _ACTIVE_RUN_LOG is not None:
+        summary_lines = [
+            f"Session id: {session.session_id}",
+            f"Protocol parse mode: {parse_mode}",
+            f"Patch id: {patch_id}",
+            f"Patch format: {command.payload.get('patch_format', '')}",
+            f"Task summary (EN): {command.task_summary_en}",
+            f"Current goal (EN): {command.current_goal_en}",
+            "Affected file entries:",
+        ]
+        files = command.payload.get("files")
+        if isinstance(files, list) and files:
+            for index, file_entry in enumerate(files, start=1):
+                if not isinstance(file_entry, dict):
+                    continue
+                op = str(file_entry.get("operation", "replace"))
+                path = str(file_entry.get("path", ""))
+                summary_lines.append(f"  [{index}] {op} {path}")
+                expected_sha256 = file_entry.get("expected_sha256")
+                if isinstance(expected_sha256, str) and expected_sha256.strip():
+                    summary_lines.append(f"      expected_sha256: {expected_sha256.strip()}")
+                replacements = file_entry.get("replacements")
+                if isinstance(replacements, list):
+                    for repl_index, replacement in enumerate(replacements, start=1):
+                        if not isinstance(replacement, dict):
+                            continue
+                        summary_lines.append(
+                            f"      replacement[{repl_index}] expected_matches={replacement.get('expected_matches', 1)}"
+                        )
+        else:
+            summary_lines.append("  <none>")
+        _ACTIVE_RUN_LOG.add_section("PATCH COMMAND SUMMARY", "\n".join(summary_lines))
+        _ACTIVE_RUN_LOG.add_section("EFFECTIVE PATCH PAYLOAD", normalized_payload)
+        _ACTIVE_RUN_LOG.add_section("NORMALIZED PATCH PAYLOAD", normalized_payload)
+        _ACTIVE_RUN_LOG.add_section(
+            "TARGET REPO STATE BEFORE PATCH",
+            "\n".join(
+                [
+                    f"Target repo HEAD before patch: {repo_head_before}",
+                    "Target repo status before patch:",
+                    status_before,
+                ]
+            ),
+        )
+    return patch_id, affected_paths, repo_head_before, status_before
+
+
+def _record_patch_failure(
+    *,
+    command: ProtocolCommand,
+    repo_root: Path,
+    affected_paths: list[Path],
+    repo_head_before: str,
+    exc: PatchApplyError,
+    parse_mode: str,
+    source_windows: str = "",
+    repair_prompt_generated: bool = False,
+) -> None:
+    if _ACTIVE_RUN_LOG is None:
+        return
+    repo_head_after = _safe_get_head_commit(repo_root)
+    status_after = _safe_status_summary(repo_root, affected_paths)
+    lines = [
+        "Patch decision: rejected",
+        f"Protocol parse mode: {parse_mode}",
+        f"Failure stage: {getattr(exc, 'stage', 'unknown')}",
+        f"Failure reason: {exc}",
+        f"Why repair prompt was generated: {exc}" if repair_prompt_generated else "Why repair prompt was generated: <not generated>",
+        "Affected paths:",
+    ]
+    if affected_paths:
+        lines.extend(f"  - {path.as_posix()}" for path in affected_paths)
+    else:
+        lines.append("  - <none>")
+    details = getattr(exc, "details", {}) if isinstance(getattr(exc, "details", {}), dict) else {}
+    if details:
+        lines.append("Failure details:")
+        for key, value in sorted(details.items()):
+            lines.append(f"  {key}: {value}")
+    _ACTIVE_RUN_LOG.add_section("PATCH VALIDATION", "\n".join(lines))
+    _ACTIVE_RUN_LOG.add_section(
+        "PATCH APPLY RESULT",
+        "\n".join(
+            [
+                f"Target repo HEAD before patch: {repo_head_before}",
+                f"Target repo HEAD after patch: {repo_head_after}",
+                "Post-failure git status:",
+                status_after,
+            ]
+        ),
+    )
+    resulting_diff = _safe_get_paths_diff(repo_root, affected_paths)
+    if resulting_diff:
+        _ACTIVE_RUN_LOG.add_section("PATCH RESULTING DIFF", resulting_diff)
+    if source_windows:
+        _ACTIVE_RUN_LOG.add_section("PATCH FAILURE CONTEXT", source_windows)
+
+
+def _record_patch_success(
+    *,
+    command: ProtocolCommand,
+    repo_root: Path,
+    affected_paths: list[Path],
+    repo_head_before: str,
+    result,
+    parse_mode: str,
+) -> None:
+    if _ACTIVE_RUN_LOG is None:
+        return
+    repo_head_after = _safe_get_head_commit(repo_root)
+    status_after = result.git_status_summary.strip() or _safe_status_summary(repo_root, affected_paths)
+    fallbacks = list(result.fallbacks_used)
+    if parse_mode != "v2_strict":
+        fallbacks.append(f"protocol_parse_mode={parse_mode}")
+    if result.warning:
+        fallbacks.append(result.warning)
+
+    validation_lines = [
+        "Patch decision: accepted",
+        f"Protocol parse mode: {parse_mode}",
+        f"Failure stage: <none>",
+        f"Failure reason: <none>",
+        "Affected paths:",
+    ]
+    validation_lines.extend(f"  - {path}" for path in result.affected_files)
+    validation_lines.append("Fallbacks used:")
+    if fallbacks:
+        validation_lines.extend(f"  - {fallback}" for fallback in fallbacks)
+    else:
+        validation_lines.append("  - <none>")
+    _ACTIVE_RUN_LOG.add_section("PATCH VALIDATION", "\n".join(validation_lines))
+    _ACTIVE_RUN_LOG.add_section(
+        "PATCH APPLY RESULT",
+        "\n".join(
+            [
+                f"Target repo HEAD before patch: {repo_head_before}",
+                f"Target repo HEAD after patch: {repo_head_after}",
+                "Post-apply git status:",
+                status_after,
+                "",
+                _format_patch_file_results(result.file_results),
+            ]
+        ).strip(),
+    )
+    resulting_diff = _safe_get_paths_diff(repo_root, affected_paths)
+    if resulting_diff:
+        _ACTIVE_RUN_LOG.add_section("PATCH RESULTING DIFF", resulting_diff)
+
+
+def _extract_patch_repo_paths(payload: dict[str, object]) -> list[Path]:
+    files = payload.get("files")
+    if not isinstance(files, list):
+        return []
+    paths: list[Path] = []
+    for file_entry in files:
+        if not isinstance(file_entry, dict):
+            continue
+        path_text = str(file_entry.get("path", "")).replace("\\", "/").strip()
+        if not path_text:
+            continue
+        paths.append(Path(*[part for part in path_text.split("/") if part]))
+    return paths
+
+
+def _safe_get_head_commit(repo_root: Path) -> str:
+    try:
+        return get_head_commit(repo_root)
+    except Exception as exc:  # noqa: BLE001
+        return f"<unknown: {exc}>"
+
+
+def _safe_status_summary(repo_root: Path, paths: list[Path]) -> str:
+    if not paths:
+        return "<no affected paths>"
+    try:
+        summary = summarize_paths_status(repo_root, paths).strip()
+        return summary or "<clean>"
+    except Exception as exc:  # noqa: BLE001
+        return f"<failed to read status: {exc}>"
+
+
+def _safe_get_paths_diff(repo_root: Path, paths: list[Path]) -> str:
+    if not paths:
+        return ""
+    try:
+        return get_paths_diff(repo_root, paths)
+    except Exception as exc:  # noqa: BLE001
+        return f"<failed to read diff: {exc}>"
+
+
+def _format_patch_file_results(file_results) -> str:
+    lines = ["Per-file results:"]
+    if not file_results:
+        lines.append("  <none>")
+        return "\n".join(lines)
+    for file_result in file_results:
+        lines.append(f"  Path: {file_result.path}")
+        lines.append(f"    operation: {file_result.operation}")
+        lines.append(f"    expected_sha256: {file_result.expected_sha256 or '<none>'}")
+        lines.append(f"    before_sha256: {file_result.before_sha256 or '<absent>'}")
+        lines.append(f"    after_sha256: {file_result.after_sha256 or '<absent>'}")
+        if file_result.replacement_results:
+            lines.append("    replacement_results:")
+            for index, replacement in enumerate(file_result.replacement_results, start=1):
+                rendered_lines = ", ".join(str(line) for line in replacement.matched_line_numbers) or "<none>"
+                lines.append(
+                    f"      [{index}] expected={replacement.expected_matches}, found={replacement.found_matches}, lines={rendered_lines}"
+                )
+        else:
+            lines.append("    replacement_results: <none>")
+    return "\n".join(lines)
 
 
 def _handle_first_run(
@@ -200,7 +543,13 @@ def _handle_llm_response(
     session_store: SessionStore,
     session: SessionState,
 ) -> None:
-    envelope = parse_protocol_response(clipboard_text)
+    try:
+        envelope = parse_protocol_response(clipboard_text)
+    except ProtocolError as exc:
+        _record_llm_protocol_failure(clipboard_text, session, exc)
+        raise
+
+    _record_llm_command_context(envelope, session)
     command = envelope.command
     session.last_parsed_llm_response = command.to_session_summary()
     session.last_known_task_summary = command.task_summary_en
@@ -211,7 +560,7 @@ def _handle_llm_response(
         _handle_collect_context(command, config, retriever, session_store, session)
         return
     if command.command == "APPLY_PATCH":
-        _handle_apply_patch(command, config, retriever, session_store, session)
+        _handle_apply_patch(command, config, retriever, session_store, session, envelope.parse_mode)
         return
     if command.command == "ASK_HUMAN":
         print(command.summary_human)
@@ -265,15 +614,31 @@ def _handle_apply_patch(
     retriever: RepositoryRetriever,
     session_store: SessionStore,
     session: SessionState,
+    parse_mode: str,
 ) -> None:
+    repo_root = Path(session.repo_root)
+    _patch_id, affected_paths, repo_head_before, _status_before = _record_patch_attempt_start(
+        command,
+        session,
+        repo_root,
+        parse_mode,
+    )
     try:
         result = apply_patch_payload(
-            repo_root=Path(session.repo_root),
+            repo_root=repo_root,
             state_dir=session_store.state_dir,
             payload=command.payload,
             allow_apply_on_dirty_files=config.allow_apply_on_dirty_files,
         )
     except PatchInfrastructureError as exc:
+        _record_patch_failure(
+            command=command,
+            repo_root=repo_root,
+            affected_paths=affected_paths,
+            repo_head_before=repo_head_before,
+            exc=exc,
+            parse_mode=parse_mode,
+        )
         session.add_history_entry(f"PATCH_LOCAL_ERROR: {exc}")
         session_store.save(session)
         print(
@@ -294,6 +659,17 @@ def _handle_apply_patch(
         )
         return
     except PatchApplyError as exc:
+        source_windows = _build_patch_repair_source_windows(retriever, command.payload)
+        _record_patch_failure(
+            command=command,
+            repo_root=repo_root,
+            affected_paths=affected_paths,
+            repo_head_before=repo_head_before,
+            exc=exc,
+            parse_mode=parse_mode,
+            source_windows=source_windows,
+            repair_prompt_generated=True,
+        )
         repair_sections = [
             PromptSection("Patch apply failure", str(exc), required=True),
             PromptSection(
@@ -319,7 +695,6 @@ def _handle_apply_patch(
                 compact_body=_compact_body(_render_patch_payload_for_prompt(command.payload), 80),
             ),
         ]
-        source_windows = _build_patch_repair_source_windows(retriever, command.payload)
         if source_windows:
             repair_sections.append(
                 PromptSection(
@@ -363,6 +738,14 @@ def _handle_apply_patch(
     summary = ", ".join(result.affected_files)
     session.last_applied_patch_summary = summary
     session.add_history_entry(f"APPLY_PATCH: {summary}")
+    _record_patch_success(
+        command=command,
+        repo_root=repo_root,
+        affected_paths=affected_paths,
+        repo_head_before=repo_head_before,
+        result=result,
+        parse_mode=parse_mode,
+    )
     print(_human_text(config.human_language, "Patch Ð¿Ñ€Ð¾Ð²ÐµÑ€ÐµÐ½ Ð¸ Ð¿Ñ€Ð¸Ð¼ÐµÐ½ÐµÐ½.", "Patch was validated and applied."))
     if result.git_status_summary:
         print(_human_text(config.human_language, "Ð˜Ð·Ð¼ÐµÐ½ÐµÐ½Ð½Ñ‹Ðµ Ð¿ÑƒÑ‚Ð¸:", "Changed paths:"))
@@ -866,6 +1249,23 @@ def _print_mode_message(kind: ClipboardKind, human_language: str, forced: bool =
 def _configure_stdout() -> None:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
+
+
+class _ConsoleTee(io.TextIOBase):
+    def __init__(self, stream, run_log: RunLogRecorder) -> None:
+        self._stream = stream
+        self._run_log = run_log
+
+    def write(self, text: str) -> int:
+        self._run_log.append_console(text)
+        return self._stream.write(text)
+
+    def flush(self) -> None:
+        self._stream.flush()
+
+    @property
+    def encoding(self) -> str | None:
+        return getattr(self._stream, "encoding", None)
 
 
 def _print_next_step(human_language: str, message: str) -> None:

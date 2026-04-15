@@ -32,6 +32,11 @@ class GitError(DevloopError):
 class PatchApplyError(DevloopError):
     """Raised when a patch is unsafe or cannot be applied."""
 
+    def __init__(self, message: str, *, stage: str = "unknown", details: dict | None = None) -> None:
+        super().__init__(message)
+        self.stage = stage
+        self.details = details or {}
+
 
 class PatchInfrastructureError(PatchApplyError):
     """Raised when local Git or filesystem state blocks patch application."""

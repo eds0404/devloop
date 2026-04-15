@@ -88,8 +88,9 @@ class PatchApplySearchReplaceTests(unittest.TestCase):
             replacements=[SearchReplaceOp(search="old", replace="new", expected_matches=1)],
             content=None,
         )
-        updated = _apply_exact_replacements("old\r\n", plan)
+        updated, replacement_results = _apply_exact_replacements("old\r\n", plan)
         self.assertEqual(updated, "new\r\n")
+        self.assertEqual(replacement_results[0].matched_line_numbers, [1])
 
     def test_exact_replacements_reject_no_changes(self) -> None:
         plan = SearchReplaceFilePlan(
@@ -102,6 +103,21 @@ class PatchApplySearchReplaceTests(unittest.TestCase):
         with self.assertRaises(PatchApplyError) as context:
             _apply_exact_replacements("old\n", plan)
         self.assertIn("produced no changes", str(context.exception))
+        self.assertEqual(context.exception.stage, "no_change_check")
+
+    def test_exact_replacements_reports_matched_line_numbers_on_count_mismatch(self) -> None:
+        plan = SearchReplaceFilePlan(
+            path=PurePosixPath("src/main/scala/com/acme/Parser.scala"),
+            operation="replace",
+            expected_sha256=None,
+            replacements=[SearchReplaceOp(search="old", replace="new", expected_matches=2)],
+            content=None,
+        )
+        with self.assertRaises(PatchApplyError) as context:
+            _apply_exact_replacements("x\nold\ny\n", plan)
+        self.assertEqual(context.exception.stage, "match_count_check")
+        self.assertEqual(context.exception.details["found_matches"], 1)
+        self.assertEqual(context.exception.details["matched_line_numbers"], [2])
 
     def test_refuses_dirty_files_when_not_allowed(self) -> None:
         repo_root = self._make_repo_root()
@@ -162,6 +178,8 @@ class PatchApplySearchReplaceTests(unittest.TestCase):
                 "src/main/scala/com/acme/OldFile.scala",
             ],
         )
+        self.assertEqual(result.file_results[0].after_sha256 is not None, True)
+        self.assertEqual(result.file_results[1].before_sha256 is not None, True)
 
     def test_replace_only_patch_can_continue_without_staging_on_index_lock(self) -> None:
         repo_root = self._make_repo_root()
@@ -201,6 +219,7 @@ class PatchApplySearchReplaceTests(unittest.TestCase):
             )
 
         self.assertIn("Git staging skipped locally", result.warning)
+        self.assertIn("git_stage_skipped", result.fallbacks_used)
         self.assertEqual(target.read_text(encoding="utf-8"), "new\n")
 
     def test_rolls_back_create_file_when_git_add_fails(self) -> None:

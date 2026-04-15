@@ -1,5 +1,6 @@
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest import mock
 
 from devloop.cli import (
@@ -173,12 +174,56 @@ class CliTests(unittest.TestCase):
         with mock.patch("devloop.cli.apply_patch_payload", side_effect=PatchInfrastructureError("index.lock denied")):
             with mock.patch("devloop.cli.set_clipboard_text") as clipboard_mock:
                 with mock.patch("builtins.print") as print_mock:
-                    _handle_apply_patch(command, config, retriever, session_store, session)
-
+                    _handle_apply_patch(command, config, retriever, session_store, session, "v2_strict")
         clipboard_mock.assert_not_called()
         output = "\n".join(str(call.args[0]) for call in print_mock.call_args_list if call.args)
         self.assertIn("Patch was not applied because of a local Git or filesystem error.", output)
         self.assertIn("index.lock denied", output)
+
+    def test_main_writes_run_log_next_to_config(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "devloop.yaml"
+            repo_root = Path(temp_dir) / "repo"
+            repo_root.mkdir()
+            config_path.write_text(f"project_root: {repo_root}\nhuman_language: en\n", encoding="utf-8")
+
+            session = SessionState(
+                repo_root=str(repo_root),
+                session_id="test-session",
+                initialized=False,
+                last_run_at="2026-01-01T00:00:00+00:00",
+            )
+
+            class FakeSessionStore:
+                def __init__(self, *_args, **_kwargs) -> None:
+                    self.session_path = repo_root / "session.yaml"
+                    self.state_dir = repo_root / ".state"
+
+                def load_or_create(self) -> SessionState:
+                    return session
+
+                def save(self, _session: SessionState) -> None:
+                    return None
+
+            with mock.patch("devloop.cli.SessionStore", FakeSessionStore):
+                with mock.patch("devloop.cli._system_get_clipboard_text", return_value="clipboard input"):
+                    with mock.patch("devloop.cli._system_set_clipboard_text") as clipboard_set_mock:
+                        with mock.patch("devloop.cli.discover_repo_root", return_value=repo_root):
+                            with mock.patch("devloop.cli.build_bootstrap_prompt", return_value="BOOTSTRAP PROMPT"):
+                                exit_code = __import__("devloop.cli", fromlist=["main"]).main(
+                                    ["--config", str(config_path), "--force-bootstrap"]
+                                )
+
+            self.assertEqual(exit_code, 0)
+            clipboard_set_mock.assert_called_once_with("BOOTSTRAP PROMPT")
+            log_text = (Path(temp_dir) / ".devloop.log").read_text(encoding="utf-8")
+            self.assertIn("Devloop HEAD:", log_text)
+            self.assertIn("Arguments:\n  [0] --config", log_text)
+            self.assertIn("----- BEGIN CONFIG FILE -----", log_text)
+            self.assertIn("human_language: en", log_text)
+            self.assertIn("----- BEGIN CONSOLE OUTPUT -----", log_text)
+            self.assertIn("Bootstrap mode was forced.", log_text)
+            self.assertIn("----- BEGIN CLIPBOARD AFTER -----\nBOOTSTRAP PROMPT\n----- END CLIPBOARD AFTER -----", log_text)
 
 
 if __name__ == "__main__":
