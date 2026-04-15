@@ -49,6 +49,7 @@ def detect_clipboard_content(text: str) -> DetectionResult:
 def _score_compile_output(text: str) -> DetectionResult:
     score = 0
     reasons: list[str] = []
+    found_compile_activity = False
     if re.search(r"(?im)^\[error\]\s+.*\.scala:\d+:\d+:", text):
         score += 3
         reasons.append("Found Scala file:line:column compiler errors")
@@ -65,6 +66,24 @@ def _score_compile_output(text: str) -> DetectionResult:
     if re.search(r"(?im)^\[error\]\s+\^$", text):
         score += 1
         reasons.append("Found compiler caret lines")
+    if re.search(r"(?im)^\[info\]\s+compiling\b.*\bScala sources\b", text):
+        score += 3
+        reasons.append("Found Scala source compilation marker")
+        found_compile_activity = True
+    if re.search(r"(?im)^\[info\]\s+done compiling\b", text):
+        score += 2
+        reasons.append("Found successful compile completion marker")
+        found_compile_activity = True
+    if re.search(r"(?im)^\[info\]\s+scalafmt:\s+Formatting\b.*\bScala sources\b", text):
+        score += 1
+        reasons.append("Found Scala formatting marker")
+        found_compile_activity = True
+    if re.search(r"(?im)^\[warn\]\s+.*\.scala:\d+:\d+:", text):
+        score += 1
+        reasons.append("Found Scala warning locations")
+    if re.search(r"(?im)^\[success\]\s+Total time:", text) and found_compile_activity:
+        score += 1
+        reasons.append("Found sbt success marker after compile activity")
     return DetectionResult(kind=ClipboardKind.SBT_COMPILE, score=score, reasons=reasons)
 
 

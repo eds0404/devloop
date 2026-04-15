@@ -60,14 +60,20 @@ class RepositoryRetriever:
                 detail_lines.append("Source snippet:")
                 detail_lines.append(snippet)
             diagnostics.append("\n".join(detail_lines))
+        compile_status = "yes" if parsed.succeeded else "no"
         summary = (
+            f"Compile succeeded: {compile_status}\n"
             f"Compile diagnostics included: {len(parsed.diagnostics)}\n"
             f"Distinct files: {parsed.file_count}\n"
-            f"Raw [error] lines seen: {parsed.raw_error_lines}"
+            f"Raw [error] lines seen: {parsed.raw_error_lines}\n"
+            f"Raw [warn] lines seen: {parsed.raw_warning_lines}"
         )
+        details_body = "\n\n".join(diagnostics)
+        if not details_body and parsed.succeeded:
+            details_body = "No compile errors parsed. The compile run completed successfully."
         return [
             QueryResult("compile_summary", "Parsed compile diagnostics", summary),
-            QueryResult("compile_details", "Compile detail blocks", "\n\n".join(diagnostics) or "No diagnostics parsed."),
+            QueryResult("compile_details", "Compile detail blocks", details_body or "No diagnostics parsed."),
         ]
 
     def build_test_query_results(self, parsed: TestParseResult) -> list[QueryResult]:

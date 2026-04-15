@@ -31,14 +31,23 @@ class CompileParseResult:
     total_errors: int
     file_count: int
     raw_error_lines: int
+    raw_warning_lines: int
+    succeeded: bool
 
 
 def parse_sbt_compile_output(text: str, max_error_groups: int | None = None) -> CompileParseResult:
     diagnostics: list[CompileDiagnostic] = []
     current: CompileDiagnostic | None = None
     raw_error_lines = 0
+    raw_warning_lines = 0
+    succeeded = False
 
     for line in text.splitlines():
+        if line.startswith("[warn]"):
+            raw_warning_lines += 1
+        elif line.startswith("[success]") and "total time:" in line.lower():
+            succeeded = True
+
         if not line.startswith("[error]"):
             current = None
             continue
@@ -91,4 +100,6 @@ def parse_sbt_compile_output(text: str, max_error_groups: int | None = None) -> 
         total_errors=len(deduped),
         file_count=file_count,
         raw_error_lines=raw_error_lines,
+        raw_warning_lines=raw_warning_lines,
+        succeeded=succeeded,
     )

@@ -10,6 +10,14 @@ COMPILE_SAMPLE = """
 [error] (Compile / compileIncremental) Compilation failed
 """.strip()
 
+COMPILE_SUCCESS_SAMPLE = """
+[info] scalafmt: Formatting 1 Scala sources (C:\\repo\\core)...
+[info] compiling 6 Scala sources to C:\\repo\\core\\target\\scala-2.13\\classes ...
+[warn] C:\\repo\\core\\src\\main\\scala\\com\\acme\\Parser.scala:10:5: discarded non-Unit value
+[info] done compiling
+[success] Total time: 12 s, completed Apr 13, 2026, 4:09:45 PM
+""".strip()
+
 TEST_SAMPLE = """
 [info] ParserSpec:
 [info] - should parse empty input *** FAILED ***
@@ -39,6 +47,10 @@ class DetectorTests(unittest.TestCase):
 
     def test_detects_compile_log(self) -> None:
         result = detect_clipboard_content(COMPILE_SAMPLE)
+        self.assertEqual(result.kind, ClipboardKind.SBT_COMPILE)
+
+    def test_detects_successful_compile_log_without_errors(self) -> None:
+        result = detect_clipboard_content(COMPILE_SUCCESS_SAMPLE)
         self.assertEqual(result.kind, ClipboardKind.SBT_COMPILE)
 
     def test_detects_test_log(self) -> None:

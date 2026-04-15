@@ -5,6 +5,7 @@ from unittest import mock
 from devloop.cli import (
     _build_arg_parser,
     _handle_apply_patch,
+    _handle_collect_context,
     _maybe_add_project_tree_summary,
     _resolve_detection,
     _should_include_full_protocol_reference,
@@ -32,6 +33,52 @@ class CliTests(unittest.TestCase):
 
     def test_auto_mode_keeps_detector(self) -> None:
         detection, forced = _resolve_detection("plain text", "auto")
+        self.assertFalse(forced)
+        self.assertEqual(detection.kind, ClipboardKind.RAW_TEXT)
+
+    def test_auto_mode_reclassifies_generic_sbt_success_when_session_expects_compile(self) -> None:
+        session = SessionState(
+            repo_root=str(Path(__file__).resolve().parents[1]),
+            session_id="test-session",
+            initialized=True,
+            last_run_at="2026-01-01T00:00:00+00:00",
+            last_parsed_llm_response={
+                "next_step_human": "Run compile again.",
+                "current_goal_en": "Validate the compile result.",
+            },
+        )
+        text = "\n".join(
+            [
+                "[info] welcome to sbt 1.12.9",
+                "[info] loading settings for project root from build.sbt...",
+                "[info] set current project to parboiled2-root",
+                "[success] Total time: 2 s, completed Apr 14, 2026, 7:56:58 PM",
+            ]
+        )
+        detection, forced = _resolve_detection(text, "auto", session)
+        self.assertFalse(forced)
+        self.assertEqual(detection.kind, ClipboardKind.SBT_COMPILE)
+
+    def test_auto_mode_keeps_generic_sbt_success_as_raw_without_compile_context(self) -> None:
+        session = SessionState(
+            repo_root=str(Path(__file__).resolve().parents[1]),
+            session_id="test-session",
+            initialized=True,
+            last_run_at="2026-01-01T00:00:00+00:00",
+            last_parsed_llm_response={
+                "next_step_human": "Run tests next.",
+                "current_goal_en": "Validate the test result.",
+            },
+        )
+        text = "\n".join(
+            [
+                "[info] welcome to sbt 1.12.9",
+                "[info] loading settings for project root from build.sbt...",
+                "[info] set current project to parboiled2-root",
+                "[success] Total time: 2 s, completed Apr 14, 2026, 7:56:58 PM",
+            ]
+        )
+        detection, forced = _resolve_detection(text, "auto", session)
         self.assertFalse(forced)
         self.assertEqual(detection.kind, ClipboardKind.RAW_TEXT)
 
@@ -68,6 +115,38 @@ class CliTests(unittest.TestCase):
         self.assertFalse(_should_include_full_protocol_reference(session))
         session.note_followup_prompt_generated()
         self.assertTrue(_should_include_full_protocol_reference(session))
+
+    def test_collect_context_builds_prompt_without_name_error(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        config = DevloopConfig(project_root=repo_root, human_language="en")
+        command = ProtocolCommand(
+            version="1",
+            command="COLLECT_CONTEXT",
+            summary_human="Collect the required context.",
+            next_step_human="Paste the new prompt into ChatGPT.",
+            task_summary_en="Inspect the required files.",
+            current_goal_en="Read the smallest useful repository context.",
+            payload={"queries": [{"type": "read_file", "file": "README.md"}]},
+        )
+        session = SessionState(
+            repo_root=str(repo_root),
+            session_id="test-session",
+            initialized=True,
+            last_run_at="2026-01-01T00:00:00+00:00",
+        )
+        retriever = mock.Mock()
+        retriever.execute_queries.return_value = [QueryResult("read_file", "README", "body")]
+        session_store = mock.Mock()
+
+        with mock.patch("devloop.cli.set_clipboard_text") as clipboard_mock:
+            with mock.patch("builtins.print") as print_mock:
+                _handle_collect_context(command, config, retriever, session_store, session)
+
+        clipboard_mock.assert_called_once()
+        session_store.save.assert_called()
+        output = "\n".join(str(call.args[0]) for call in print_mock.call_args_list if call.args)
+        self.assertIn("Collect the required context.", output)
+        self.assertIn("A new prompt for ChatGPT was copied to the clipboard.", output)
 
     def test_local_patch_infrastructure_error_does_not_build_repair_prompt(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

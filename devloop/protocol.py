@@ -277,6 +277,14 @@ def _dedent_relaxed_block(lines: list[str]) -> str:
     return "\n".join(line[common_indent:] if len(line) >= common_indent else "" for line in lines)
 
 
+def _preserve_relaxed_block(lines: list[str]) -> str:
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return "\n".join(lines)
+
+
 def _looks_like_v2_protocol_block(raw_block: str) -> bool:
     lines = [line.strip() for line in raw_block.splitlines() if line.strip()]
     if not lines:
@@ -523,7 +531,7 @@ def _collect_v2_block(lines: list[str], index: int, end_marker: str) -> tuple[st
     while index < len(lines):
         stripped = lines[index].strip()
         if _normalize_v2_token(stripped) == normalized_end_marker:
-            return _dedent_relaxed_block(collected), index + 1
+            return _preserve_relaxed_block(collected), index + 1
         collected.append(lines[index])
         index += 1
     raise ProtocolError(f"Missing {end_marker} in DEVLOOP_COMMAND_V2 block payload")

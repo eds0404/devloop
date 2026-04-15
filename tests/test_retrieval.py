@@ -5,6 +5,7 @@ import uuid
 
 from devloop.config import DevloopConfig
 from devloop.errors import RetrievalError
+from devloop.parsers.sbt_compile import CompileParseResult
 from devloop.retrieval import RepositoryRetriever
 
 
@@ -89,6 +90,24 @@ class RetrievalTests(unittest.TestCase):
         summary = retriever.project_tree_summary()
         self.assertIn("src/main/scala/App.scala", summary)
         self.assertNotIn("target/generated.txt", summary)
+
+    def test_build_compile_query_results_reports_success_without_errors(self) -> None:
+        retriever = self._make_retriever()
+        parsed = CompileParseResult(
+            diagnostics=[],
+            total_errors=0,
+            file_count=0,
+            raw_error_lines=0,
+            raw_warning_lines=2,
+            succeeded=True,
+        )
+
+        results = retriever.build_compile_query_results(parsed)
+        self.assertEqual(results[0].query_type, "compile_summary")
+        self.assertIn("Compile succeeded: yes", results[0].body)
+        self.assertIn("Raw [warn] lines seen: 2", results[0].body)
+        self.assertEqual(results[1].query_type, "compile_details")
+        self.assertIn("completed successfully", results[1].body)
 
 
 if __name__ == "__main__":

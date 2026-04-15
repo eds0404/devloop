@@ -88,6 +88,34 @@ new
         envelope = parse_protocol_response(response)
         self.assertEqual(envelope.command.payload["files"][0]["replacements"][0]["replace"], "new")
 
+    def test_preserves_leading_spaces_in_patch_blocks(self) -> None:
+        response = """
+<<<DEVLOOP_COMMAND_START>>>
+DEVLOOP_COMMAND_V2
+VERSION: 1
+COMMAND: APPLY_PATCH
+SUMMARY_HUMAN: Apply the exact patch.
+NEXT_STEP_HUMAN: Run compile.
+TASK_SUMMARY_EN: Preserve exact source indentation.
+CURRENT_GOAL_EN: Keep leading spaces in SEARCH and REPLACE blocks.
+PATCH_FORMAT: SEARCH_REPLACE_BLOCKS_V1
+*** BEGIN FILE ***
+PATH: src/main/scala/com/acme/Parser.scala
+OP: REPLACE
+MATCH_COUNT: 1
+@@@SEARCH@@@
+    old
+@@@REPLACE@@@
+    new
+@@@END@@@
+*** END FILE ***
+<<<DEVLOOP_COMMAND_END>>>
+""".strip()
+        envelope = parse_protocol_response(response)
+        replacement = envelope.command.payload["files"][0]["replacements"][0]
+        self.assertEqual(replacement["search"], "    old")
+        self.assertEqual(replacement["replace"], "    new")
+
     def test_parses_v2_create_and_delete_operations(self) -> None:
         response = """
 <<<DEVLOOP_COMMAND_START>>>
