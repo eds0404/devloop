@@ -5,6 +5,7 @@ from unittest import mock
 
 from devloop.cli import (
     _build_arg_parser,
+    _build_followup_prompt,
     _handle_apply_patch,
     _handle_collect_context,
     _maybe_add_project_tree_summary,
@@ -14,6 +15,7 @@ from devloop.cli import (
 from devloop.config import DevloopConfig
 from devloop.detector import ClipboardKind
 from devloop.errors import PatchInfrastructureError
+from devloop.prompt_builder import PromptSection
 from devloop.protocol import ProtocolCommand
 from devloop.retrieval import QueryResult
 from devloop.session import SessionState
@@ -104,18 +106,55 @@ class CliTests(unittest.TestCase):
         self.assertEqual(query_results[-1].query_type, "project_tree")
         retriever.project_tree_summary.assert_called_once()
 
-    def test_full_protocol_reference_is_included_every_other_followup_prompt(self) -> None:
+    def test_full_protocol_reference_is_included_every_eighth_followup_prompt(self) -> None:
         session = SessionState(
             repo_root=str(Path(__file__).resolve().parents[1]),
             session_id="test-session",
             initialized=True,
             last_run_at="2026-01-01T00:00:00+00:00",
         )
+        for _ in range(7):
+            self.assertFalse(_should_include_full_protocol_reference(session))
+            session.note_followup_prompt_generated(False)
         self.assertTrue(_should_include_full_protocol_reference(session))
-        session.note_followup_prompt_generated()
+        session.note_followup_prompt_generated(True)
+        self.assertEqual(session.followup_prompt_count, 0)
         self.assertFalse(_should_include_full_protocol_reference(session))
-        session.note_followup_prompt_generated()
+
+    def test_forced_full_protocol_reference_resets_cycle(self) -> None:
+        session = SessionState(
+            repo_root=str(Path(__file__).resolve().parents[1]),
+            session_id="test-session",
+            initialized=True,
+            last_run_at="2026-01-01T00:00:00+00:00",
+            followup_prompt_count=5,
+        )
+        prompt_result = _build_followup_prompt(
+            session=session,
+            task_summary="Task",
+            current_goal="Goal",
+            source_label="unit test",
+            human_language_name="English",
+            sections=[PromptSection("Important", "Body", required=True)],
+            max_chars=4000,
+            force_full_protocol_reference=True,
+        )
+        self.assertIn("Full protocol reference", prompt_result.text)
+        self.assertEqual(session.followup_prompt_count, 0)
+        self.assertFalse(session.force_full_protocol_reference)
+
+    def test_session_flag_for_full_protocol_reference_is_consumed(self) -> None:
+        session = SessionState(
+            repo_root=str(Path(__file__).resolve().parents[1]),
+            session_id="test-session",
+            initialized=True,
+            last_run_at="2026-01-01T00:00:00+00:00",
+        )
+        session.request_full_protocol_reference()
         self.assertTrue(_should_include_full_protocol_reference(session))
+        session.note_followup_prompt_generated(True)
+        self.assertFalse(session.force_full_protocol_reference)
+        self.assertEqual(session.followup_prompt_count, 0)
 
     def test_collect_context_builds_prompt_without_name_error(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

@@ -530,6 +530,7 @@ def _refresh_session_protocol_revision(session: SessionState) -> bool:
     session.protocol_revision = CURRENT_PROTOCOL_REVISION
     session.initialized = False
     session.followup_prompt_count = 0
+    session.force_full_protocol_reference = False
     session.last_generated_prompt = ""
     session.last_truncation_report = ""
     session.last_parsed_llm_response = {}
@@ -546,6 +547,8 @@ def _handle_llm_response(
     try:
         envelope = parse_protocol_response(clipboard_text)
     except ProtocolError as exc:
+        session.request_full_protocol_reference()
+        session_store.save(session)
         _record_llm_protocol_failure(clipboard_text, session, exc)
         raise
 
@@ -711,6 +714,7 @@ def _handle_apply_patch(
             human_language_name=config.human_language_name,
             sections=repair_sections,
             max_chars=config.max_prompt_chars,
+            force_full_protocol_reference=True,
         )
         set_clipboard_text(prompt_result.text)
         session.last_generated_prompt = prompt_result.text
@@ -958,7 +962,12 @@ def _build_followup_prompt(
     human_language_name: str,
     sections: list[PromptSection],
     max_chars: int,
+    force_full_protocol_reference: bool = False,
 ):
+    include_full_protocol_reference = _should_include_full_protocol_reference(
+        session,
+        force_full_protocol_reference=force_full_protocol_reference,
+    )
     prompt_result = build_context_prompt(
         task_summary=task_summary,
         current_goal=current_goal,
@@ -966,9 +975,9 @@ def _build_followup_prompt(
         human_language_name=human_language_name,
         sections=sections,
         max_chars=max_chars,
-        include_protocol_reference=_should_include_full_protocol_reference(session),
+        include_protocol_reference=include_full_protocol_reference,
     )
-    session.note_followup_prompt_generated()
+    session.note_followup_prompt_generated(include_full_protocol_reference)
     return prompt_result
 
 
@@ -1121,8 +1130,14 @@ def _maybe_add_project_tree_summary(
     query_results.append(QueryResult("project_tree", "Project tree summary", retriever.project_tree_summary()))
 
 
-def _should_include_full_protocol_reference(session: SessionState) -> bool:
-    return session.followup_prompt_count % 2 == 0
+def _should_include_full_protocol_reference(
+    session: SessionState,
+    *,
+    force_full_protocol_reference: bool = False,
+) -> bool:
+    if force_full_protocol_reference or session.force_full_protocol_reference:
+        return True
+    return session.followup_prompt_count >= 7
 
 
 def _resolve_detection(

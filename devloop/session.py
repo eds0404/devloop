@@ -13,7 +13,7 @@ from typing import Any
 from devloop.errors import SessionError
 from devloop import yaml_compat as yaml
 
-CURRENT_PROTOCOL_REVISION = "2"
+CURRENT_PROTOCOL_REVISION = "3"
 
 
 @dataclass(slots=True)
@@ -31,6 +31,7 @@ class SessionState:
     last_truncation_report: str = ""
     command_history_summary: list[str] = field(default_factory=list)
     followup_prompt_count: int = 0
+    force_full_protocol_reference: bool = False
 
     def touch(self) -> None:
         self.last_run_at = _utc_now()
@@ -43,8 +44,16 @@ class SessionState:
         if len(self.command_history_summary) > max_entries:
             self.command_history_summary = self.command_history_summary[-max_entries:]
 
-    def note_followup_prompt_generated(self) -> None:
+    def note_followup_prompt_generated(self, included_full_protocol_reference: bool) -> None:
+        if included_full_protocol_reference:
+            self.followup_prompt_count = 0
+            self.force_full_protocol_reference = False
+            return
         self.followup_prompt_count += 1
+
+    def request_full_protocol_reference(self) -> None:
+        self.force_full_protocol_reference = True
+        self.followup_prompt_count = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -61,6 +70,7 @@ class SessionState:
             "last_truncation_report": self.last_truncation_report,
             "command_history_summary": list(self.command_history_summary),
             "followup_prompt_count": self.followup_prompt_count,
+            "force_full_protocol_reference": self.force_full_protocol_reference,
         }
 
     @classmethod
@@ -79,6 +89,7 @@ class SessionState:
             last_truncation_report=str(data.get("last_truncation_report", "")),
             command_history_summary=list(data.get("command_history_summary", [])),
             followup_prompt_count=int(data.get("followup_prompt_count", 0)),
+            force_full_protocol_reference=bool(data.get("force_full_protocol_reference", False)),
         )
 
 

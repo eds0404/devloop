@@ -85,10 +85,24 @@ class SessionTests(unittest.TestCase):
             "last_run_at": "2026-01-01T00:00:00+00:00",
             "protocol_revision": CURRENT_PROTOCOL_REVISION,
             "followup_prompt_count": 3,
+            "force_full_protocol_reference": True,
         }
         restored = SessionState.from_dict(session)
         self.assertEqual(restored.followup_prompt_count, 3)
         self.assertEqual(restored.protocol_revision, CURRENT_PROTOCOL_REVISION)
+        self.assertTrue(restored.force_full_protocol_reference)
+
+    def test_request_full_protocol_reference_resets_counter(self) -> None:
+        session = SessionState(
+            repo_root="C:\\repo",
+            session_id="session-id",
+            initialized=True,
+            last_run_at="2026-01-01T00:00:00+00:00",
+            followup_prompt_count=6,
+        )
+        session.request_full_protocol_reference()
+        self.assertTrue(session.force_full_protocol_reference)
+        self.assertEqual(session.followup_prompt_count, 0)
 
     def test_refresh_session_protocol_revision_resets_old_session(self) -> None:
         session = SessionState(
@@ -106,6 +120,7 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(session.protocol_revision, CURRENT_PROTOCOL_REVISION)
         self.assertEqual(session.last_generated_prompt, "")
         self.assertEqual(session.followup_prompt_count, 0)
+        self.assertFalse(session.force_full_protocol_reference)
 
 
 if __name__ == "__main__":
