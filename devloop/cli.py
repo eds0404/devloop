@@ -604,7 +604,7 @@ def _handle_collect_context(
     print(
         _human_text(
             config.human_language,
-            "Ð’ Ð±ÑƒÑ„ÐµÑ€ Ð¾Ð±Ð¼ÐµÐ½Ð° Ð¿Ð¾Ð¼ÐµÑ‰ÐµÐ½ Ð½Ð¾Ð²Ñ‹Ð¹ prompt Ð´Ð»Ñ ChatGPT.",
+            "В буфер обмена помещен новый prompt для ChatGPT.",
             "A new prompt for ChatGPT was copied to the clipboard.",
         )
     )
