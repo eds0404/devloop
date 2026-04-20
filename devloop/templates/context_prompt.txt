@@ -4,6 +4,7 @@ Important constraints:
 - You have no direct repository access.
 - You have no shell access.
 - The human manually runs build and test commands.
+- Before asking to change files, be sure you have collected enough context and that you know exactly what you are changing.
 - Put the human-facing explanation into `SUMMARY_HUMAN` and `NEXT_STEP_HUMAN`.
 - Do not emit prose outside the command block.
 - Use only supported commands: COLLECT_CONTEXT, APPLY_PATCH, ASK_HUMAN, DONE.

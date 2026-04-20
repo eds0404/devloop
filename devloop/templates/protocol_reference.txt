@@ -9,6 +9,7 @@ Response discipline:
 - Put the full human-facing explanation into `SUMMARY_HUMAN` and `NEXT_STEP_HUMAN`.
 - Do not emit prose outside the command block.
 - Never emit a second draft, a corrected second attempt, or repeated copies of the same block.
+- Before asking to change files, first make sure you have enough context and know exactly what the change should do.
 
 Hard rules:
 - Do not use Markdown code fences inside the command block.
@@ -52,6 +53,7 @@ COLLECT_CONTEXT rules:
 - Use one `*** BEGIN QUERY ***` section per query.
 
 APPLY_PATCH rules:
+- Do not propose a patch until you are confident that the available context is sufficient.
 - Use `PATCH_FORMAT: SEARCH_REPLACE_BLOCKS_V1`.
 - Use one `*** BEGIN FILE ***` section per file.
 - Supported file operations:

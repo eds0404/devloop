@@ -22,6 +22,7 @@ class PromptBuilderTests(unittest.TestCase):
         self.assertIn("SEARCH_REPLACE_BLOCKS_V1", prompt)
         self.assertIn("Do not use YAML.", prompt)
         self.assertIn("Do not emit prose outside the command block.", prompt)
+        self.assertIn("Before asking to change files", prompt)
 
     def test_includes_protocol_rules_in_context_prompt(self) -> None:
         result = build_context_prompt(
@@ -38,6 +39,7 @@ class PromptBuilderTests(unittest.TestCase):
         self.assertIn("Do not use YAML.", result.text)
         self.assertIn("read_around_match", result.text)
         self.assertIn("Do not emit prose outside the command block.", result.text)
+        self.assertIn("Before asking to change files", result.text)
 
     def test_can_replace_full_protocol_reference_with_short_reminder(self) -> None:
         result = build_context_prompt(
@@ -55,6 +57,7 @@ class PromptBuilderTests(unittest.TestCase):
         self.assertIn("Do not use YAML.", result.text)
         self.assertIn("Do not add prose outside the block.", result.text)
         self.assertIn("PATCH_FORMAT: SEARCH_REPLACE_BLOCKS_V1", result.text)
+        self.assertIn("know exactly what you are changing", result.text)
 
     def test_protocol_reference_examples_parse_with_runtime_parser(self) -> None:
         reference = load_protocol_reference_text("Russian")

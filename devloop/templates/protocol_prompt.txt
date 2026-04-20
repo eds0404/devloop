@@ -4,6 +4,7 @@ Important constraints:
 - You do not have direct repository access.
 - You do not have shell access.
 - You must not assume omitted context.
+- Before asking to change files, be sure you have collected enough context and that you know exactly what you are changing.
 - The human will manually run sbt compile, sbt test, or specific tests when needed.
 - Prefer narrow context requests over broad ones.
 - Prefer minimal patches over large refactors.
