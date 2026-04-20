@@ -910,7 +910,7 @@ def _handle_raw_clipboard(
 def _query_results_to_sections(query_results: list[QueryResult]) -> list[PromptSection]:
     sections: list[PromptSection] = []
     for index, result in enumerate(query_results):
-        compact = _compact_body(result.body, 24)
+        compact = None if result.query_type == "project_tree" else _compact_body(result.body, 24)
         sections.append(
             PromptSection(
                 title=result.title,

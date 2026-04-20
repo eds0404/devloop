@@ -91,6 +91,20 @@ class RetrievalTests(unittest.TestCase):
         self.assertIn("src/main/scala/App.scala", summary)
         self.assertNotIn("target/generated.txt", summary)
 
+    def test_project_tree_summary_does_not_truncate_to_max_files(self) -> None:
+        config = DevloopConfig(project_root=self.root, max_files=2)
+        for index in range(5):
+            path = self.root / "src" / "main" / "scala" / f"File{index}.scala"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(f"object File{index} {{}}\n", encoding="utf-8")
+
+        retriever = RepositoryRetriever(self.root, config)
+        summary = retriever.project_tree_summary()
+
+        self.assertIn("src/main/scala/File0.scala", summary)
+        self.assertIn("src/main/scala/File4.scala", summary)
+        self.assertNotIn("omitted", summary)
+
     def test_build_compile_query_results_reports_success_without_errors(self) -> None:
         retriever = self._make_retriever()
         parsed = CompileParseResult(

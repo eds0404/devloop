@@ -9,6 +9,7 @@ from devloop.cli import (
     _handle_apply_patch,
     _handle_collect_context,
     _maybe_add_project_tree_summary,
+    _query_results_to_sections,
     _resolve_detection,
     _should_include_full_protocol_reference,
 )
@@ -105,6 +106,13 @@ class CliTests(unittest.TestCase):
         self.assertEqual(len(query_results), 2)
         self.assertEqual(query_results[-1].query_type, "project_tree")
         retriever.project_tree_summary.assert_called_once()
+
+    def test_project_tree_section_is_not_compacted_before_prompt_budgeting(self) -> None:
+        body = "\n".join(f"- path/to/file{index}.scala" for index in range(30))
+        sections = _query_results_to_sections([QueryResult("project_tree", "Project tree", body)])
+
+        self.assertEqual(len(sections), 1)
+        self.assertIsNone(sections[0].compact_body)
 
     def test_full_protocol_reference_is_included_every_eighth_followup_prompt(self) -> None:
         session = SessionState(

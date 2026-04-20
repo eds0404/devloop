@@ -161,11 +161,8 @@ class RepositoryRetriever:
     def project_tree_summary(self) -> str:
         files = list(self.iter_project_files())
         lines: list[str] = []
-        for path in files[: self.config.max_files]:
+        for path in files:
             lines.append(f"- {path.relative_to(self.repo_root).as_posix()}")
-        omitted = max(0, len(files) - len(lines))
-        if omitted:
-            lines.append(f"- ... omitted {omitted} more files")
         return "\n".join(lines) or "<no files matched include/exclude rules>"
 
     def find_related_files(self, target: str) -> list[Path]:
