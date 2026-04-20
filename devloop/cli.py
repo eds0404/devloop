@@ -69,7 +69,7 @@ def main(argv: list[str] | None = None) -> int:
                     print(
                         _human_text(
                             config.human_language,
-                            f"ÐŸÐ¾Ð²Ñ€ÐµÐ¶Ð´ÐµÐ½Ð½Ð°Ñ session file Ð±Ñ‹Ð»Ð° ÑÐ±Ñ€Ð¾ÑˆÐµÐ½Ð°: {session_store.session_path}",
+                            f"Поврежденная session file была сброшена: {session_store.session_path}",
                             f"A broken session file was reset: {session_store.session_path}",
                         )
                     )
@@ -80,7 +80,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(
                     _human_text(
                         config.human_language,
-                        "Ð›Ð¾ÐºÐ°Ð»ÑŒÐ½Ð°Ñ ÑÐµÑÑÐ¸Ñ Ð¿ÐµÑ€ÐµÐ²ÐµÐ´ÐµÐ½Ð° Ð½Ð° Ð½Ð¾Ð²ÑƒÑŽ Ñ€ÐµÐ²Ð¸Ð·Ð¸ÑŽ Ð¿Ñ€Ð¾Ñ‚Ð¾ÐºÐ¾Ð»Ð°. ÐÑƒÐ¶ÐµÐ½ Ð½Ð¾Ð²Ñ‹Ð¹ bootstrap prompt.",
+                        "Локальная сессия переведена на новую ревизию протокола. Нужен новый bootstrap prompt.",
                         "The local session was upgraded to a new protocol revision. A fresh bootstrap prompt is required.",
                     )
                 )
@@ -97,7 +97,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise DevloopError(
                     _human_text(
                         config.human_language,
-                        "Ð‘ÑƒÑ„ÐµÑ€ Ð¾Ð±Ð¼ÐµÐ½Ð° Ð¿ÑƒÑÑ‚. Ð¡ÐºÐ¾Ð¿Ð¸Ñ€ÑƒÐ¹ Ð¾Ñ‚Ð²ÐµÑ‚ ChatGPT Ð¸Ð»Ð¸ Ð»Ð¾Ð³ Ð¸ Ð·Ð°Ð¿ÑƒÑÑ‚Ð¸ ÐºÐ¾Ð¼Ð°Ð½Ð´Ñƒ ÑÐ½Ð¾Ð²Ð°.",
+                        "Буфер обмена пуст. Скопируй ответ ChatGPT или лог и запусти команду снова.",
                         "Clipboard is empty. Copy a ChatGPT response or a log and run the command again.",
                     )
                 )
@@ -120,7 +120,7 @@ def main(argv: list[str] | None = None) -> int:
             exit_code = 0
             return exit_code
         except DevloopError as exc:
-            print(_human_text(config.human_language if 'config' in locals() else "ru", f"ÐžÑˆÐ¸Ð±ÐºÐ°: {exc}", f"Error: {exc}"))
+            print(_human_text(config.human_language if 'config' in locals() else "ru", f"Ошибка: {exc}", f"Error: {exc}"))
             exit_code = 1
             return exit_code
         finally:
@@ -501,15 +501,15 @@ def _handle_first_run(
         print(
             _human_text(
                 config.human_language,
-                "Ð ÐµÐ¶Ð¸Ð¼ bootstrap Ð²ÐºÐ»ÑŽÑ‡ÐµÐ½ Ð¿Ñ€Ð¸Ð½ÑƒÐ´Ð¸Ñ‚ÐµÐ»ÑŒÐ½Ð¾.",
+                "Режим bootstrap включен принудительно.",
                 "Bootstrap mode was forced.",
             )
         )
-    print(_human_text(config.human_language, "ÐŸÐµÑ€Ð²Ñ‹Ð¹ Ð·Ð°Ð¿ÑƒÑÐº Ð´Ð»Ñ ÑÑ‚Ð¾Ð³Ð¾ Ñ€ÐµÐ¿Ð¾Ð·Ð¸Ñ‚Ð¾Ñ€Ð¸Ñ.", "First run for this repository."))
+    print(_human_text(config.human_language, "Первый запуск для этого репозитория.", "First run for this repository."))
     print(
         _human_text(
             config.human_language,
-            "Ð’ Ð±ÑƒÑ„ÐµÑ€ Ð¾Ð±Ð¼ÐµÐ½Ð° Ð¿Ð¾Ð¼ÐµÑ‰ÐµÐ½ bootstrap prompt Ð´Ð»Ñ ChatGPT.",
+            "В буфер обмена помещен bootstrap prompt для ChatGPT.",
             "A bootstrap prompt for ChatGPT was copied to the clipboard.",
         )
     )
@@ -517,7 +517,7 @@ def _handle_first_run(
         config.human_language,
         _human_text(
             config.human_language,
-            "Ð²ÑÑ‚Ð°Ð²ÑŒ ÑÑ‚Ð¾Ñ‚ prompt Ð² ChatGPT Ð²Ð¼ÐµÑÑ‚Ðµ Ñ Ð¸ÑÑ…Ð¾Ð´Ð½Ñ‹Ð¼ Ð¾Ð¿Ð¸ÑÐ°Ð½Ð¸ÐµÐ¼ Ð·Ð°Ð´Ð°Ñ‡Ð¸ Ð¸ Ð·Ð°Ñ‚ÐµÐ¼ ÑÐºÐ¾Ð¿Ð¸Ñ€ÑƒÐ¹ Ð¿Ð¾Ð»Ð½Ñ‹Ð¹ Ð¾Ñ‚Ð²ÐµÑ‚ ChatGPT Ð² Ð±ÑƒÑ„ÐµÑ€ Ð¾Ð±Ð¼ÐµÐ½Ð°.",
+            "вставь этот prompt в ChatGPT вместе с исходным описанием задачи и затем скопируй полный ответ ChatGPT в буфер обмена.",
             "paste this prompt into ChatGPT together with the original task description, then copy the full ChatGPT reply to the clipboard.",
         ),
     )
@@ -647,7 +647,7 @@ def _handle_apply_patch(
         print(
             _human_text(
                 config.human_language,
-                "ÐŸÐ°Ñ‚Ñ‡ Ð½Ðµ Ð¿Ñ€Ð¸Ð¼ÐµÐ½ÐµÐ½ Ð¸Ð·-Ð·Ð° Ð»Ð¾ÐºÐ°Ð»ÑŒÐ½Ð¾Ð¹ Ð¾ÑˆÐ¸Ð±ÐºÐ¸ Git Ð¸Ð»Ð¸ Ñ„Ð°Ð¹Ð»Ð¾Ð²Ð¾Ð¹ ÑÐ¸ÑÑ‚ÐµÐ¼Ñ‹.",
+                "Патч не применен из-за локальной ошибки Git или файловой системы.",
                 "Patch was not applied because of a local Git or filesystem error.",
             )
         )
@@ -656,7 +656,7 @@ def _handle_apply_patch(
             config.human_language,
             _human_text(
                 config.human_language,
-                "Ð¿Ñ€Ð¾Ð²ÐµÑ€ÑŒ, Ñ‡Ñ‚Ð¾ Ð´Ñ€ÑƒÐ³Ð¾Ð¹ git-Ð¿Ñ€Ð¾Ñ†ÐµÑÑ Ð½Ðµ Ð´ÐµÑ€Ð¶Ð¸Ñ‚ .git/index.lock Ð¸ Ñ‡Ñ‚Ð¾ Ñ€ÐµÐ¿Ð¾Ð·Ð¸Ñ‚Ð¾Ñ€Ð¸Ð¹ Ð´Ð¾ÑÑ‚ÑƒÐ¿ÐµÐ½ Ð½Ð° Ð·Ð°Ð¿Ð¸ÑÑŒ, Ð·Ð°Ñ‚ÐµÐ¼ ÑÐ½Ð¾Ð²Ð° Ð·Ð°Ð¿ÑƒÑÑ‚Ð¸ Ñ‚Ñƒ Ð¶Ðµ ÐºÐ¾Ð¼Ð°Ð½Ð´Ñƒ.",
+                "проверь, что другой git-процесс не держит .git/index.lock и что репозиторий доступен на запись, затем снова запусти ту же команду.",
                 "check that no other git process holds .git/index.lock and that the repository is writable, then run the same command again.",
             ),
         )
@@ -721,11 +721,11 @@ def _handle_apply_patch(
         session.last_truncation_report = prompt_result.truncation_report
         session.add_history_entry(f"PATCH_REPAIR: {exc}")
         session_store.save(session)
-        print(_human_text(config.human_language, "Patch Ð½Ðµ Ð¿Ñ€Ð¸Ð¼ÐµÐ½ÐµÐ½ Ð°Ð²Ñ‚Ð¾Ð¼Ð°Ñ‚Ð¸Ñ‡ÐµÑÐºÐ¸.", "Patch was not applied automatically."))
+        print(_human_text(config.human_language, "Патч не применен автоматически.", "Patch was not applied automatically."))
         print(
             _human_text(
                 config.human_language,
-                "Ð’ Ð±ÑƒÑ„ÐµÑ€ Ð¾Ð±Ð¼ÐµÐ½Ð° Ð¿Ð¾Ð¼ÐµÑ‰ÐµÐ½ repair prompt Ð´Ð»Ñ ChatGPT.",
+                "В буфер обмена помещен repair prompt для ChatGPT.",
                 "A repair prompt for ChatGPT was copied to the clipboard.",
             )
         )
@@ -733,7 +733,7 @@ def _handle_apply_patch(
             config.human_language,
             _human_text(
                 config.human_language,
-                "Ð²ÑÑ‚Ð°Ð²ÑŒ repair prompt Ð² ChatGPT Ð¸ Ð¿Ð¾Ð»ÑƒÑ‡Ð¸ Ð¸ÑÐ¿Ñ€Ð°Ð²Ð»ÐµÐ½Ð½Ñ‹Ð¹ Ð¾Ñ‚Ð²ÐµÑ‚ Ñ Ð¾Ð´Ð½Ð¾Ð¹ machine-readable ÐºÐ¾Ð¼Ð°Ð½Ð´Ð¾Ð¹.",
+                "вставь repair prompt в ChatGPT и получи исправленный ответ с одной machine-readable командой.",
                 "paste the repair prompt into ChatGPT and get a corrected reply with exactly one machine-readable command.",
             ),
         )
@@ -750,9 +750,9 @@ def _handle_apply_patch(
         result=result,
         parse_mode=parse_mode,
     )
-    print(_human_text(config.human_language, "Patch Ð¿Ñ€Ð¾Ð²ÐµÑ€ÐµÐ½ Ð¸ Ð¿Ñ€Ð¸Ð¼ÐµÐ½ÐµÐ½.", "Patch was validated and applied."))
+    print(_human_text(config.human_language, "Patch проверен и применен.", "Patch was validated and applied."))
     if result.git_status_summary:
-        print(_human_text(config.human_language, "Ð˜Ð·Ð¼ÐµÐ½ÐµÐ½Ð½Ñ‹Ðµ Ð¿ÑƒÑ‚Ð¸:", "Changed paths:"))
+        print(_human_text(config.human_language, "Измененные пути:", "Changed paths:"))
         print(result.git_status_summary)
     print(command.summary_human)
     _print_next_step(config.human_language, command.next_step_human)
@@ -772,14 +772,14 @@ def _handle_compile_log(
         current_goal = "Compilation completed without blocking errors. Decide the next narrow manual step."
         status_message = _human_text(
             config.human_language,
-            f"ÃÂÃÂ°ÃÂ¹ÃÂ´ÃÂµÃÂ½ sbt compile log: successful run, ÃÂ¾Ã‘Ë†ÃÂ¸ÃÂ±ÃÂ¾ÃÂº {parsed.total_errors}, warning lines {parsed.raw_warning_lines}.",
+            f"Найден sbt compile log: успешный прогон, ошибок {parsed.total_errors}, строк warning {parsed.raw_warning_lines}.",
             f"Detected sbt compile log: successful run, errors {parsed.total_errors}, warning lines {parsed.raw_warning_lines}.",
         )
     else:
         current_goal = session.last_known_current_goal or "Analyze the compile diagnostics and propose the smallest safe next step."
         status_message = _human_text(
             config.human_language,
-            f"ÃÂÃÂ°ÃÂ¹ÃÂ´ÃÂµÃÂ½ sbt compile log: ÃÂ¾Ã‘Ë†ÃÂ¸ÃÂ±ÃÂ¾ÃÂº {parsed.total_errors}, Ã‘â€žÃÂ°ÃÂ¹ÃÂ»ÃÂ¾ÃÂ² {parsed.file_count}.",
+            f"Найден sbt compile log: ошибок {parsed.total_errors}, файлов {parsed.file_count}.",
             f"Detected sbt compile log: errors {parsed.total_errors}, files {parsed.file_count}.",
         )
     prompt_result = _build_followup_prompt(
@@ -799,7 +799,7 @@ def _handle_compile_log(
     print(
         _human_text(
             config.human_language,
-            "Ãâ€™ ÃÂ±Ã‘Æ’Ã‘â€žÃÂµÃ‘â‚¬ ÃÂ¾ÃÂ±ÃÂ¼ÃÂµÃÂ½ÃÂ° ÃÂ¿ÃÂ¾ÃÂ¼ÃÂµÃ‘â€°ÃÂµÃÂ½ ÃÂ½ÃÂ¾ÃÂ²Ã‘â€¹ÃÂ¹ prompt ÃÂ´ÃÂ»Ã‘Â ChatGPT.",
+            "В буфер обмена помещен новый prompt для ChatGPT.",
             "A new prompt for ChatGPT was copied to the clipboard.",
         )
     )
@@ -807,33 +807,11 @@ def _handle_compile_log(
         config.human_language,
         _human_text(
             config.human_language,
-            "ÃÂ²Ã‘ÂÃ‘â€šÃÂ°ÃÂ²Ã‘Å’ Ã‘ÂÃ‘â€šÃÂ¾Ã‘â€š prompt ÃÂ² ChatGPT, ÃÂ¿ÃÂ¾ÃÂ»Ã‘Æ’Ã‘â€¡ÃÂ¸ ÃÂ¾Ã‘â€šÃÂ²ÃÂµÃ‘â€š, Ã‘ÂÃÂºÃÂ¾ÃÂ¿ÃÂ¸Ã‘â‚¬Ã‘Æ’ÃÂ¹ ÃÂµÃÂ³ÃÂ¾ ÃÂ² ÃÂ±Ã‘Æ’Ã‘â€žÃÂµÃ‘â‚¬ ÃÂ¸ Ã‘ÂÃÂ½ÃÂ¾ÃÂ²ÃÂ° ÃÂ·ÃÂ°ÃÂ¿Ã‘Æ’Ã‘ÂÃ‘â€šÃÂ¸ Ã‘â€šÃ‘Æ’ ÃÂ¶ÃÂµ ÃÂºÃÂ¾ÃÂ¼ÃÂ°ÃÂ½ÃÂ´Ã‘Æ’.",
+            "вставь этот prompt в ChatGPT, получи ответ, скопируй его в буфер и снова запусти ту же команду.",
             "paste this prompt into ChatGPT, get the reply, copy it to the clipboard, and run the same command again.",
         ),
     )
     return
-    print(
-        _human_text(
-            config.human_language,
-            f"ÐÐ°Ð¹Ð´ÐµÐ½ sbt compile log: Ð¾ÑˆÐ¸Ð±Ð¾Ðº {parsed.total_errors}, Ñ„Ð°Ð¹Ð»Ð¾Ð² {parsed.file_count}.",
-            f"Detected sbt compile log: errors {parsed.total_errors}, files {parsed.file_count}.",
-        )
-    )
-    print(
-        _human_text(
-            config.human_language,
-            "Ð’ Ð±ÑƒÑ„ÐµÑ€ Ð¾Ð±Ð¼ÐµÐ½Ð° Ð¿Ð¾Ð¼ÐµÑ‰ÐµÐ½ Ð½Ð¾Ð²Ñ‹Ð¹ prompt Ð´Ð»Ñ ChatGPT.",
-            "A new prompt for ChatGPT was copied to the clipboard.",
-        )
-    )
-    _print_next_step(
-        config.human_language,
-        _human_text(
-            config.human_language,
-            "Ð²ÑÑ‚Ð°Ð²ÑŒ ÑÑ‚Ð¾Ñ‚ prompt Ð² ChatGPT, Ð¿Ð¾Ð»ÑƒÑ‡Ð¸ Ð¾Ñ‚Ð²ÐµÑ‚, ÑÐºÐ¾Ð¿Ð¸Ñ€ÑƒÐ¹ ÐµÐ³Ð¾ Ð² Ð±ÑƒÑ„ÐµÑ€ Ð¸ ÑÐ½Ð¾Ð²Ð° Ð·Ð°Ð¿ÑƒÑÑ‚Ð¸ Ñ‚Ñƒ Ð¶Ðµ ÐºÐ¾Ð¼Ð°Ð½Ð´Ñƒ.",
-            "paste this prompt into ChatGPT, get the reply, copy it to the clipboard, and run the same command again.",
-        ),
-    )
 
 
 def _handle_test_log(
@@ -862,14 +840,14 @@ def _handle_test_log(
     print(
         _human_text(
             config.human_language,
-            f"ÐÐ°Ð¹Ð´ÐµÐ½ sbt test log: Ð¿Ð°Ð´ÐµÐ½Ð¸Ð¹ {parsed.total_failures}.",
+            f"Найден sbt test log: падений {parsed.total_failures}.",
             f"Detected sbt test log: failures {parsed.total_failures}.",
         )
     )
     print(
         _human_text(
             config.human_language,
-            "Ð’ Ð±ÑƒÑ„ÐµÑ€ Ð¾Ð±Ð¼ÐµÐ½Ð° Ð¿Ð¾Ð¼ÐµÑ‰ÐµÐ½ Ð½Ð¾Ð²Ñ‹Ð¹ prompt Ð´Ð»Ñ ChatGPT.",
+            "В буфер обмена помещен новый prompt для ChatGPT.",
             "A new prompt for ChatGPT was copied to the clipboard.",
         )
     )
@@ -877,7 +855,7 @@ def _handle_test_log(
         config.human_language,
         _human_text(
             config.human_language,
-            "Ð²ÑÑ‚Ð°Ð²ÑŒ ÑÑ‚Ð¾Ñ‚ prompt Ð² ChatGPT, Ð¿Ð¾Ð»ÑƒÑ‡Ð¸ Ð¾Ñ‚Ð²ÐµÑ‚, ÑÐºÐ¾Ð¿Ð¸Ñ€ÑƒÐ¹ ÐµÐ³Ð¾ Ð² Ð±ÑƒÑ„ÐµÑ€ Ð¸ ÑÐ½Ð¾Ð²Ð° Ð·Ð°Ð¿ÑƒÑÑ‚Ð¸ Ñ‚Ñƒ Ð¶Ðµ ÐºÐ¾Ð¼Ð°Ð½Ð´Ñƒ.",
+            "вставь этот prompt в ChatGPT, получи ответ, скопируй его в буфер и снова запусти ту же команду.",
             "paste this prompt into ChatGPT, get the reply, copy it to the clipboard, and run the same command again.",
         ),
     )
@@ -908,14 +886,14 @@ def _handle_raw_clipboard(
     print(
         _human_text(
             config.human_language,
-            "Ð Ð°ÑÐ¿Ð¾Ð·Ð½Ð°Ð½ Ð¾Ð±Ñ‹Ñ‡Ð½Ñ‹Ð¹ Ñ‚ÐµÐºÑÑ‚ Ð¸Ð»Ð¸ Ð»Ð¾Ð³ Ð±ÐµÐ· ÑÐ¿ÐµÑ†Ð¸Ð°Ð»ÑŒÐ½Ð¾Ð³Ð¾ Ñ„Ð¾Ñ€Ð¼Ð°Ñ‚Ð°.",
+            "Распознан обычный текст или лог без специального формата.",
             "Detected plain text or a log without a special format.",
         )
     )
     print(
         _human_text(
             config.human_language,
-            "Ð’ Ð±ÑƒÑ„ÐµÑ€ Ð¾Ð±Ð¼ÐµÐ½Ð° Ð¿Ð¾Ð¼ÐµÑ‰ÐµÐ½ Ð½Ð¾Ð²Ñ‹Ð¹ prompt Ð´Ð»Ñ ChatGPT.",
+            "В буфер обмена помещен новый prompt для ChatGPT.",
             "A new prompt for ChatGPT was copied to the clipboard.",
         )
     )
@@ -923,7 +901,7 @@ def _handle_raw_clipboard(
         config.human_language,
         _human_text(
             config.human_language,
-            "Ð²ÑÑ‚Ð°Ð²ÑŒ ÑÑ‚Ð¾Ñ‚ prompt Ð² ChatGPT, Ð¿Ð¾Ð»ÑƒÑ‡Ð¸ Ð¾Ñ‚Ð²ÐµÑ‚, ÑÐºÐ¾Ð¿Ð¸Ñ€ÑƒÐ¹ ÐµÐ³Ð¾ Ð² Ð±ÑƒÑ„ÐµÑ€ Ð¸ ÑÐ½Ð¾Ð²Ð° Ð·Ð°Ð¿ÑƒÑÑ‚Ð¸ Ñ‚Ñƒ Ð¶Ðµ ÐºÐ¾Ð¼Ð°Ð½Ð´Ñƒ.",
+            "вставь этот prompt в ChatGPT, получи ответ, скопируй его в буфер и снова запусти ту же команду.",
             "paste this prompt into ChatGPT, get the reply, copy it to the clipboard, and run the same command again.",
         ),
     )
@@ -1212,7 +1190,7 @@ def _session_expects_compile(session: SessionState) -> bool:
         str(session.last_known_task_summary),
     ]
     combined = "\n".join(haystacks).lower()
-    return "compile" in combined or "ÐºÐ¾Ð¼Ð¿Ð¸Ð»" in combined or "ÑÐ±Ð¾Ñ€Ðº" in combined
+    return "compile" in combined or "компил" in combined or "сборк" in combined
 
 
 def _load_session_for_run(
@@ -1235,27 +1213,27 @@ def _print_mode_message(kind: ClipboardKind, human_language: str, forced: bool =
     messages = {
         ClipboardKind.LLM_RESPONSE: _human_text(
             human_language,
-            "Ð Ð°ÑÐ¿Ð¾Ð·Ð½Ð°Ð½ Ð¾Ñ‚Ð²ÐµÑ‚ LLM Ñ machine-readable ÐºÐ¾Ð¼Ð°Ð½Ð´Ð¾Ð¹.",
+            "Распознан ответ LLM с machine-readable командой.",
             "Detected an LLM response with a machine-readable command.",
         ),
         ClipboardKind.SBT_COMPILE: _human_text(
             human_language,
-            "Ð Ð°ÑÐ¿Ð¾Ð·Ð½Ð°Ð½ sbt compile output.",
+            "Распознан sbt compile output.",
             "Detected sbt compile output.",
         ),
         ClipboardKind.SBT_TEST: _human_text(
             human_language,
-            "Ð Ð°ÑÐ¿Ð¾Ð·Ð½Ð°Ð½ sbt test output.",
+            "Распознан sbt test output.",
             "Detected sbt test output.",
         ),
         ClipboardKind.RAW_TEXT: _human_text(
             human_language,
-            "Ð Ð°ÑÐ¿Ð¾Ð·Ð½Ð°Ð½ Ð¾Ð±Ñ‹Ñ‡Ð½Ñ‹Ð¹ Ñ‚ÐµÐºÑÑ‚ Ð¸Ð· Ð±ÑƒÑ„ÐµÑ€Ð° Ð¾Ð±Ð¼ÐµÐ½Ð°.",
+            "Распознан обычный текст из буфера обмена.",
             "Detected plain text from the clipboard.",
         ),
     }
     if forced:
-        prefix = _human_text(human_language, "ÐŸÑ€Ð¸Ð½ÑƒÐ´Ð¸Ñ‚ÐµÐ»ÑŒÐ½Ð¾ Ð²Ñ‹Ð±Ñ€Ð°Ð½ Ñ€ÐµÐ¶Ð¸Ð¼:", "Forced mode selected:")
+        prefix = _human_text(human_language, "Принудительно выбран режим:", "Forced mode selected:")
         print(f"{prefix} {messages[kind]}")
         return
     print(messages[kind])
@@ -1284,7 +1262,7 @@ class _ConsoleTee(io.TextIOBase):
 
 
 def _print_next_step(human_language: str, message: str) -> None:
-    prefix = "Ð”Ð°Ð»ÑŒÑˆÐµ" if human_language == "ru" else "Next"
+    prefix = "Дальше" if human_language == "ru" else "Next"
     print(f"{prefix}: {message}")
 
 
