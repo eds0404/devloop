@@ -79,6 +79,7 @@ class PromptBuilderTests(unittest.TestCase):
         for query_type in SUPPORTED_QUERY_TYPES:
             self.assertIn(f"`{query_type}`", reference)
         self.assertIn(SUPPORTED_PATCH_FORMAT_V2, reference)
+        self.assertIn("PATH: <directory>", reference)
 
     def test_reports_truncation_at_section_boundaries(self) -> None:
         sections = [

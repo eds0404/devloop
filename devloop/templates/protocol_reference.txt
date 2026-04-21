@@ -50,6 +50,7 @@ COLLECT_CONTEXT rules:
 - Ask for the smallest useful context.
 - Prefer direct file/snippet reads over broad scans.
 - Request `project_tree` only when repository structure is genuinely needed.
+- `project_tree` may optionally include `PATH: <directory>` to request one subtree.
 - Use one `*** BEGIN QUERY ***` section per query.
 
 APPLY_PATCH rules:

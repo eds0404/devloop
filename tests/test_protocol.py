@@ -51,6 +51,26 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(envelope.command.summary_human, "Collecting the minimum context.")
         self.assertEqual(envelope.command.payload["queries"][0]["type"], "read_snippet")
 
+    def test_parses_project_tree_query_with_path(self) -> None:
+        response = """
+<<<DEVLOOP_COMMAND_START>>>
+DEVLOOP_COMMAND_V2
+VERSION: 1
+COMMAND: COLLECT_CONTEXT
+SUMMARY_HUMAN: Need the subtree.
+NEXT_STEP_HUMAN: Paste the next prompt.
+TASK_SUMMARY_EN: Inspect repository layout.
+CURRENT_GOAL_EN: Read one source subtree.
+*** BEGIN QUERY ***
+TYPE: project_tree
+PATH: core/src
+*** END QUERY ***
+<<<DEVLOOP_COMMAND_END>>>
+""".strip()
+        envelope = parse_protocol_response(response)
+        self.assertEqual(envelope.command.payload["queries"][0]["type"], "project_tree")
+        self.assertEqual(envelope.command.payload["queries"][0]["path"], "core/src")
+
     def test_rejects_multiple_distinct_blocks(self) -> None:
         other = SAMPLE_RESPONSE_V2.replace("COMMAND: COLLECT_CONTEXT", "COMMAND: DONE", 1)
         invalid = SAMPLE_RESPONSE_V2 + "\n" + other

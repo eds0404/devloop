@@ -1,5 +1,6 @@
 from pathlib import Path
 import shutil
+import subprocess
 import unittest
 import uuid
 
@@ -15,11 +16,16 @@ class RetrievalTests(unittest.TestCase):
         self.root.mkdir(parents=True, exist_ok=True)
 
     def tearDown(self) -> None:
-        shutil.rmtree(self.root.parent, ignore_errors=True)
+        shutil.rmtree(self.root, ignore_errors=True)
 
     def _make_retriever(self) -> RepositoryRetriever:
         config = DevloopConfig(project_root=self.root)
         return RepositoryRetriever(self.root, config)
+
+    def _init_git_repo(self) -> None:
+        subprocess.run(["git", "init"], cwd=self.root, check=True, capture_output=True, text=True)
+        subprocess.run(["git", "config", "user.email", "devloop@example.com"], cwd=self.root, check=True, capture_output=True, text=True)
+        subprocess.run(["git", "config", "user.name", "devloop"], cwd=self.root, check=True, capture_output=True, text=True)
 
     def test_resolve_repo_path_stays_inside_repo(self) -> None:
         scala_file = self.root / "src" / "main" / "scala" / "Example.scala"
@@ -104,6 +110,38 @@ class RetrievalTests(unittest.TestCase):
         self.assertIn("src/main/scala/File0.scala", summary)
         self.assertIn("src/main/scala/File4.scala", summary)
         self.assertNotIn("omitted", summary)
+
+    def test_project_tree_summary_supports_subtree_path(self) -> None:
+        first = self.root / "core" / "src" / "main" / "scala" / "Core.scala"
+        first.parent.mkdir(parents=True, exist_ok=True)
+        first.write_text("object Core {}\n", encoding="utf-8")
+        second = self.root / "registry-writer" / "src" / "main" / "scala" / "Main.scala"
+        second.parent.mkdir(parents=True, exist_ok=True)
+        second.write_text("object Main {}\n", encoding="utf-8")
+
+        retriever = self._make_retriever()
+        summary = retriever.project_tree_summary("core/src")
+
+        self.assertIn("core/src/main/scala/Core.scala", summary)
+        self.assertNotIn("registry-writer/src/main/scala/Main.scala", summary)
+
+    def test_project_tree_summary_uses_git_visible_files_not_ignored_output(self) -> None:
+        self._init_git_repo()
+        tracked = self.root / "src" / "main" / "scala" / "App.scala"
+        tracked.parent.mkdir(parents=True, exist_ok=True)
+        tracked.write_text("object App {}\n", encoding="utf-8")
+        ignored = self.root / "target" / "generated.txt"
+        ignored.parent.mkdir(parents=True, exist_ok=True)
+        ignored.write_text("generated\n", encoding="utf-8")
+        (self.root / ".gitignore").write_text("target/\n", encoding="utf-8")
+        subprocess.run(["git", "add", ".gitignore", "src/main/scala/App.scala"], cwd=self.root, check=True, capture_output=True, text=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=self.root, check=True, capture_output=True, text=True)
+
+        retriever = self._make_retriever()
+        summary = retriever.project_tree_summary()
+
+        self.assertIn("src/main/scala/App.scala", summary)
+        self.assertNotIn("target/generated.txt", summary)
 
     def test_build_compile_query_results_reports_success_without_errors(self) -> None:
         retriever = self._make_retriever()

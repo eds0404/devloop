@@ -185,6 +185,9 @@ Supported query types:
 - `related_files`
 - `related_tests`
 
+`project_tree` may optionally include `PATH: <directory>` to request one subtree.
+Project-tree and search-style retrieval operate on Git-visible files (`tracked + untracked, excluding ignored`), not arbitrary build output on disk.
+
 ### `APPLY_PATCH`
 
 Use this to request exact file edits.

@@ -82,6 +82,28 @@ def get_head_commit(repo_root: Path) -> str:
     return result.stdout.strip()
 
 
+def list_repo_files(repo_root: Path) -> list[Path]:
+    top_level = run_git(repo_root, ["rev-parse", "--show-toplevel"]).stdout.strip()
+    if Path(top_level).resolve() != repo_root.resolve():
+        raise GitError(f"Configured project_root is not a Git repository root: {repo_root}")
+    result = run_git(repo_root, ["ls-files", "--cached", "--others", "--exclude-standard", "-z"])
+    paths: list[Path] = []
+    for raw_path in result.stdout.split("\0"):
+        relative = raw_path.strip()
+        if not relative:
+            continue
+        candidate = (repo_root / relative).resolve()
+        if not candidate.exists() or not candidate.is_file():
+            continue
+        try:
+            candidate.relative_to(repo_root.resolve())
+        except ValueError:
+            continue
+        paths.append(candidate)
+    paths.sort(key=lambda item: item.relative_to(repo_root).as_posix())
+    return paths
+
+
 def get_paths_diff(repo_root: Path, paths: list[Path]) -> str:
     if not paths:
         return ""

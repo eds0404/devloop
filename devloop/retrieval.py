@@ -10,6 +10,7 @@ from typing import Iterable
 
 from devloop.config import DevloopConfig
 from devloop.errors import RetrievalError
+from devloop.git_tools import list_repo_files
 from devloop.parsers.sbt_compile import CompileParseResult
 from devloop.parsers.sbt_test import TestParseResult
 
@@ -110,17 +111,7 @@ class RepositoryRetriever:
         return QueryResult("raw_clipboard", "Raw clipboard content", excerpt)
 
     def iter_project_files(self) -> Iterable[Path]:
-        files: list[Path] = []
-        for path in self.repo_root.rglob("*"):
-            if not path.is_file():
-                continue
-            rel = path.relative_to(self.repo_root).as_posix()
-            if self._is_excluded(rel):
-                continue
-            if not self._is_included(rel):
-                continue
-            files.append(path)
-        files.sort(key=lambda item: item.relative_to(self.repo_root).as_posix())
+        files = self._collect_repo_files()
         return files
 
     def resolve_repo_path(self, user_path: str) -> Path:
@@ -158,8 +149,11 @@ class RepositoryRetriever:
             rendered.append(f"{index:>5} | {line}")
         return "\n".join(rendered) if rendered else "<empty snippet>"
 
-    def project_tree_summary(self) -> str:
+    def project_tree_summary(self, base_path: str | None = None) -> str:
         files = list(self.iter_project_files())
+        base_dir = self._resolve_project_tree_base(base_path)
+        if base_dir is not None:
+            files = [path for path in files if self._is_within_base_dir(path, base_dir)]
         lines: list[str] = []
         for path in files:
             lines.append(f"- {path.relative_to(self.repo_root).as_posix()}")
@@ -192,7 +186,13 @@ class RepositoryRetriever:
         query: dict[str, object],
     ) -> QueryResult:
         if query_type == "project_tree":
-            return QueryResult(query_type, f"Query {index}: project_tree", self.project_tree_summary())
+            requested_path = query.get("path")
+            if requested_path is not None and not isinstance(requested_path, str):
+                raise RetrievalError("project_tree path must be a string when present")
+            title = f"Query {index}: project_tree"
+            if isinstance(requested_path, str) and requested_path.strip():
+                title = f"Query {index}: project_tree ({requested_path.strip()})"
+            return QueryResult(query_type, title, self.project_tree_summary(requested_path))
         if query_type == "file_search":
             name = self._require_string(query, "query")
             limit = self._bounded_limit(query.get("limit"), self.config.max_search_results)
@@ -350,6 +350,48 @@ class RepositoryRetriever:
         if not paths:
             return "<no matches>"
         return "\n".join(f"- {path.relative_to(self.repo_root).as_posix()}" for path in paths)
+
+    def _collect_repo_files(self) -> list[Path]:
+        try:
+            files = list_repo_files(self.repo_root)
+        except Exception:
+            files = []
+            for path in self.repo_root.rglob("*"):
+                if path.is_file():
+                    files.append(path)
+            files.sort(key=lambda item: item.relative_to(self.repo_root).as_posix())
+
+        filtered: list[Path] = []
+        for path in files:
+            rel = path.relative_to(self.repo_root).as_posix()
+            if self._is_excluded(rel):
+                continue
+            if not self._is_included(rel):
+                continue
+            filtered.append(path)
+        return filtered
+
+    def _resolve_project_tree_base(self, base_path: str | None) -> Path | None:
+        if base_path is None or not base_path.strip():
+            return None
+        normalized = base_path.replace("\\", "/").strip()
+        candidate = (self.repo_root / normalized).resolve()
+        try:
+            candidate.relative_to(self.repo_root)
+        except ValueError as exc:
+            raise RetrievalError(f"Path escapes repository root: {base_path}") from exc
+        if not candidate.exists():
+            raise RetrievalError(f"Path does not exist: {base_path}")
+        if candidate.is_file():
+            raise RetrievalError(f"project_tree path must be a directory: {base_path}")
+        return candidate
+
+    def _is_within_base_dir(self, path: Path, base_dir: Path) -> bool:
+        try:
+            path.relative_to(base_dir)
+            return True
+        except ValueError:
+            return False
 
     def _is_included(self, rel_path: str) -> bool:
         return any(fnmatch.fnmatch(rel_path, pattern) for pattern in self.config.include_globs)
