@@ -35,6 +35,8 @@ Normal flow:
    - turns sbt test output into a new prompt,
    - wraps plain text into a new prompt.
 
+The bootstrap prompt always includes the current Git-visible project tree summary.
+
 Troubleshooting flags:
 
 - `--force-bootstrap` regenerates only the bootstrap prompt.

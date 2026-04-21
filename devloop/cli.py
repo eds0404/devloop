@@ -489,7 +489,12 @@ def _handle_first_run(
     session: SessionState,
     forced: bool = False,
 ) -> int:
-    prompt = build_bootstrap_prompt(repo_root.name, config.human_language_name)
+    retriever = RepositoryRetriever(repo_root, config)
+    prompt = build_bootstrap_prompt(
+        repo_root.name,
+        config.human_language_name,
+        retriever.project_tree_summary(),
+    )
     set_clipboard_text(prompt)
     session.initialized = True
     session.protocol_revision = CURRENT_PROTOCOL_REVISION

@@ -29,9 +29,13 @@ def load_template_text(name: str) -> str:
     return resources.files("devloop.templates").joinpath(name).read_text(encoding="utf-8")
 
 
-def build_bootstrap_prompt(repo_name: str, human_language_name: str) -> str:
+def build_bootstrap_prompt(
+    repo_name: str,
+    human_language_name: str,
+    project_tree_summary: str | None = None,
+) -> str:
     template = Template(load_template_text("protocol_prompt.txt"))
-    return template.substitute(
+    prompt = template.substitute(
         repo_name=repo_name,
         human_language_name=human_language_name,
         protocol_reference_section=render_section(
@@ -39,6 +43,10 @@ def build_bootstrap_prompt(repo_name: str, human_language_name: str) -> str:
             load_protocol_reference_text(human_language_name),
         ),
     )
+    project_tree_section = render_section("Project tree summary", project_tree_summary)
+    if project_tree_section:
+        return "\n\n".join([prompt.rstrip(), project_tree_section])
+    return prompt
 
 
 def build_context_prompt(

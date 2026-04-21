@@ -17,12 +17,14 @@ from devloop.protocol import (
 
 class PromptBuilderTests(unittest.TestCase):
     def test_bootstrap_prompt_includes_current_protocol_contract(self) -> None:
-        prompt = build_bootstrap_prompt("repo-name", "Russian")
+        prompt = build_bootstrap_prompt("repo-name", "Russian", "- src/main/scala/App.scala")
         self.assertIn("DEVLOOP_COMMAND_V2", prompt)
         self.assertIn("SEARCH_REPLACE_BLOCKS_V1", prompt)
         self.assertIn("Do not use YAML.", prompt)
         self.assertIn("Do not emit prose outside the command block.", prompt)
         self.assertIn("Before asking to change files", prompt)
+        self.assertIn("## Project tree summary", prompt)
+        self.assertIn("- src/main/scala/App.scala", prompt)
 
     def test_includes_protocol_rules_in_context_prompt(self) -> None:
         result = build_context_prompt(
